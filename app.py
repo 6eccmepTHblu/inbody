@@ -1,10 +1,13 @@
 """Веб-дашборд по PDF InBody: python app.py [порт] -> http://127.0.0.1:8000
 
-PDF из папки «результаты» разбираются на лету (с кэшем по mtime): положил новый — обнови страницу.
+PDF из папки «результаты» (или INBODY_PDFS) разбираются на лету с кэшем по mtime:
+новый файл — загрузить через страницу или положить в папку и обновить страницу.
 """
 import functools
 import json
+import os
 import sys
+import tempfile
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -13,7 +16,9 @@ import pymupdf
 from parse_inbody import parse
 
 ROOT = Path(__file__).parent
-PDFS = ROOT / "результаты"
+PDFS = Path(os.environ.get("INBODY_PDFS") or ROOT / "результаты")
+HOST = os.environ.get("INBODY_HOST", "127.0.0.1")
+MAX_UPLOAD = 20 * 1024 * 1024
 PANEL = "#f0f7f7"  # фон квадрантов с фигурой в новом макете
 STATUS_FILLS = {"#12b76a", "#ff7d20", "#12d8d8"}  # плашки процентов: их рисует страница под выбранный замер
 
@@ -105,16 +110,45 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/api/data":
-            self.send(json.dumps(records(), ensure_ascii=False), "application/json")
+            self.send_json(records())
         elif self.path in ("/figure/muscle.svg", "/figure/fat.svg"):
             svg = figure(self.path.removeprefix("/figure/").removesuffix(".svg"))
             self.send(svg, "image/svg+xml") if svg else self.send_error(404, "нет PDF нового макета")
         else:
             super().do_GET()
 
-    def send(self, text, ctype):
+    def do_POST(self):
+        if self.path != "/api/upload":
+            return self.send_error(404)
+        size = int(self.headers.get("Content-Length") or 0)
+        if not 0 < size <= MAX_UPLOAD:
+            return self.send_json({"error": f"Файл пустой или больше {MAX_UPLOAD >> 20} МБ"}, 413)
+        data = self.rfile.read(size)
+        if not data.startswith(b"%PDF"):
+            return self.send_json({"error": "Это не PDF"}, 400)
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "upload.pdf"
+            pdf.write_bytes(data)
+            try:
+                date = parse(pdf)["date"]
+            except pymupdf.FileDataError:
+                return self.send_json({"error": "PDF повреждён"}, 400)
+            except Exception as e:
+                return self.send_json({"error": f"Не похоже на отчёт InBody ({e})"}, 400)
+        # Имя только из даты замера: имени файла от клиента не доверяем
+        dest = PDFS / f"{date[2:].replace('-', '')}_inbody_result.pdf"
+        if dest.exists():
+            return self.send_json({"error": f"Замер за {date} уже загружен", "date": date}, 409)
+        PDFS.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        self.send_json({"date": date}, 201)
+
+    def send_json(self, obj, code=200):
+        self.send(json.dumps(obj, ensure_ascii=False), "application/json", code)
+
+    def send(self, text, ctype, code=200):
         body = text.encode()
-        self.send_response(200)
+        self.send_response(code)
         self.send_header("Content-Type", f"{ctype}; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -122,6 +156,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    print(f"http://127.0.0.1:{port}")
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 8000))
+    sys.stdout.reconfigure(encoding="utf-8")
+    print(f"http://{HOST}:{port}  PDF: {PDFS}", flush=True)
+    ThreadingHTTPServer((HOST, port), Handler).serve_forever()

@@ -26,7 +26,10 @@
   .click { cursor: pointer; transition: border-color .15s, background-color .15s; }
   .click:hover, .click:focus-visible { border-color: var(--hover); outline: none; }
   .muted { color: var(--muted); }
-  .error { background: var(--hi-bg); border-radius: 12px; padding: 10px 14px; }
+  .error, .notice { margin: 0; background: var(--hi-bg); border-radius: 12px; padding: 10px 14px; }
+  .notice { background: var(--ok-bg); }
+  .upload { font: inherit; font-weight: 700; color: #fff; background: var(--ink); border: 0; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  .upload:hover, .upload:focus-visible { background: #005966; }
 
   header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; padding: 4px 2px 6px; }
   header .brand { font-weight: 800; font-size: 20px; margin-right: auto; }
@@ -126,7 +129,7 @@ const ST = { 'Норма': 'ok', 'Выше нормы': 'hi', 'Ниже норм
 const MON = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 const SVGNS = 'http://www.w3.org/2000/svg';
 
-let recs = [], idx = 0, errors = [], openKey = null;
+let recs = [], idx = 0, errors = [], notices = [], openKey = null;
 const app = document.getElementById('app'), dlg = document.getElementById('dlg');
 
 // --- DOM: строки из PDF вставляются только как текст ---
@@ -186,7 +189,8 @@ function trendIcon(up) {  // как стрелка тренда в старом 
 // --- рендер дашборда ---
 function render() {
   if (!recs.length) {
-    app.replaceChildren(h('p', { class: 'error' }, 'Нет данных: положите PDF в папку «результаты» и обновите страницу.'), ...errors.map(e => h('p', { class: 'error' }, e)));
+    app.replaceChildren(h('header', {}, h('div', { class: 'brand' }, 'InBody ', h('span', {}, '· динамика')), uploadButton()),
+      ...messages(), h('p', { class: 'muted' }, 'Замеров пока нет: загрузите PDF-отчёт InBody кнопкой или перетащите файл на страницу.'));
     return;
   }
   const cur = recs[idx], prev = recs[idx - 1];
@@ -197,7 +201,7 @@ function render() {
   const header = h('header', {},
     h('div', { class: 'brand' }, 'InBody ', h('span', {}, '· динамика')),
     [['Имя', cur.name], ['Пол', cur.sex], ['Возраст', cur.age], ['Рост', `${cur.height_cm} см`]].map(([k, v]) => h('div', {}, h('span', { class: 'k' }, k), h('b', {}, v))),
-    h('label', {}, h('span', { class: 'k' }, 'Дата'), select));
+    h('label', {}, h('span', { class: 'k' }, 'Дата'), select), uploadButton());
 
   // карточки Вес / Мышцы / Жир
   const cards = ['weight', 'muscle', 'fat'].map(k => {
@@ -269,7 +273,7 @@ function render() {
           h('span', { class: 'c' }, parts));
       })));
 
-  app.replaceChildren(header, ...errors.map(e => h('p', { class: 'error' }, e)),
+  app.replaceChildren(header, ...messages(),
     h('div', { class: 'row top' }, h('div', { class: 'stack' }, cards), h('div', { class: 'stack' }, score, hist)),
     h('div', { class: 'row' },
       h('div', { class: 'card' }, zones, ['weight', 'muscle', 'fat', 'water', 'protein', 'bones'].map(rrow)),
@@ -414,12 +418,52 @@ function setIdx(i) {
 let raf = 0;
 addEventListener('resize', () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { render(); if (openKey) openChart(openKey); }); });
 
-fetch('/api/data').then(r => r.json()).then(d => {
-  recs = d.records; errors = d.errors;
-  const fromHash = recs.findIndex(r => r.date === location.hash.slice(1));
-  idx = fromHash >= 0 ? fromHash : recs.length - 1;
+// --- загрузка PDF ---
+const messages = () => [...errors.map(e => h('p', { class: 'error' }, e)), ...notices.map(n => h('p', { class: n.ok ? 'notice' : 'error' }, n.text))];
+
+function uploadButton() {
+  const input = h('input', { type: 'file', accept: 'application/pdf,.pdf', multiple: true, hidden: true, onchange: e => upload([...e.target.files]) });
+  return [h('button', { class: 'upload', type: 'button', title: 'Или перетащите PDF на страницу', onclick: () => input.click() }, 'Загрузить PDF'), input];
+}
+
+async function upload(files) {
+  notices = [{ ok: true, text: `Загружаю файлов: ${files.length}…` }];
   render();
-}).catch(e => app.replaceChildren(h('p', { class: 'error' }, `Не удалось загрузить данные: ${e}`)));
+  const done = [];
+  notices = [];
+  for (const f of files) {
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', body: f, headers: { 'Content-Type': 'application/pdf' } });
+      const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      if (res.ok) done.push(d.date); else notices.push({ text: `${f.name}: ${d.error}` });
+    } catch (e) {
+      notices.push({ text: `${f.name}: ${e}` });
+    }
+  }
+  if (done.length) notices.unshift({ ok: true, text: `Загружено: ${done.map(dmy).join(', ')}` });
+  await load(done.at(-1));
+}
+
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault();
+  const pdfs = [...e.dataTransfer.files].filter(f => /\.pdf$/i.test(f.name));
+  if (pdfs.length) upload(pdfs);
+});
+
+async function load(date) {
+  try {
+    const d = await fetch('/api/data').then(r => r.json());
+    recs = d.records; errors = d.errors;
+  } catch (e) {
+    errors = [`Не удалось загрузить данные: ${e}`];
+  }
+  const i = recs.findIndex(r => r.date === (date || location.hash.slice(1)));
+  idx = i >= 0 ? i : recs.length - 1;
+  if (date && i >= 0) history.replaceState(null, '', `#${date}`);
+  render();
+}
+load();
 </script>
 </body>
 </html>

@@ -31,6 +31,39 @@ def test_all_statuses_match_ranges():
             assert v["status"] == expected, (pdf.name, k, v)
 
 
+def test_upload():
+    import json
+    import tempfile
+    import threading
+    import urllib.request
+    from urllib.error import HTTPError
+
+    import app
+
+    def post(body):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, body, method="POST")) as r:
+                return r.status, json.load(r)
+        except HTTPError as e:
+            return e.code, json.load(e)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app.PDFS = Path(tmp) / "pdfs"
+        srv = app.ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_port}/api/upload"
+        pdf = (DIR / "261016_inbody_result.pdf").read_bytes()
+        try:
+            assert post(b"not a pdf")[0] == 400
+            assert post(b"%PDF-1.4 broken")[0] == 400
+            assert post(pdf) == (201, {"date": "2026-10-16"})
+            assert post(pdf)[0] == 409
+            assert [p.name for p in app.PDFS.iterdir()] == ["261016_inbody_result.pdf"]
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
