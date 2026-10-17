@@ -31,7 +31,7 @@ def test_all_statuses_match_ranges():
             assert v["status"] == expected, (pdf.name, k, v)
 
 
-def test_upload():
+def test_api():
     import json
     import tempfile
     import threading
@@ -40,9 +40,9 @@ def test_upload():
 
     import app
 
-    def post(body):
+    def post(body, path="/api/upload"):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, body, method="POST")) as r:
+            with urllib.request.urlopen(urllib.request.Request(url.replace("/api/upload", path), body, method="POST")) as r:
                 return r.status, json.load(r)
         except HTTPError as e:
             return e.code, json.load(e)
@@ -59,6 +59,13 @@ def test_upload():
             assert post(pdf) == (201, {"date": "2026-10-16"})
             assert post(pdf)[0] == 409
             assert [p.name for p in app.PDFS.iterdir()] == ["261016_inbody_result.pdf"]
+            assert app.records()["settings"] == {}
+            for bad in (b"", b"[]", b'{"start": 5}', b'{"start": "20260916"}', b'{"start": "2026-02-30"}'):
+                assert post(bad, "/api/settings")[0] == 400, bad
+            assert post(b'{"start": "2026-09-16"}', "/api/settings") == (200, {"start": "2026-09-16"})
+            assert app.records()["settings"] == {"start": "2026-09-16"}
+            assert post(b'{"start": null}', "/api/settings") == (200, {})
+            assert app.records()["settings"] == {}
         finally:
             srv.shutdown()
             srv.server_close()

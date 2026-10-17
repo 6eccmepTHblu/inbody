@@ -127,10 +127,27 @@
   .tip { position: absolute; pointer-events: none; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 12px; white-space: nowrap; box-shadow: 0 4px 16px rgba(0, 40, 50, .12); }
   .tip b { display: block; font-size: 15px; }
   details summary { cursor: pointer; color: var(--muted); }
-  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; font-variant-numeric: tabular-nums; }
-  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; }
-  th { color: var(--muted); font-weight: 500; }
-  th:first-child, td:first-child { text-align: left; }
+  .good { color: var(--ok-ink); } .bad { color: var(--hi-ink); }
+  select.inline { font-size: 13px; padding: 1px 4px; margin: 0 2px; vertical-align: 1px; }
+  .stats { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+  .stats b { color: var(--ink); }
+  .tablewrap { overflow-x: auto; margin-top: 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th button { all: unset; cursor: pointer; color: var(--muted); font-weight: 500; }
+  th button:hover, th button:focus-visible { color: var(--ink); }
+  th[aria-sort] button { color: var(--ink); font-weight: 700; }
+  th .arrow { display: inline-block; width: 1.1em; font-size: 9px; text-align: center; }
+  th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: #fff; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background-color: #f6fafa; }
+  tbody tr:focus-visible { outline: 2px solid var(--hover); outline-offset: -2px; }
+  tr.sel td { background-color: #eef5f5; font-weight: 700; }
+  tr.sel td:first-child { box-shadow: inset 3px 0 var(--ink); }
+  tr.old td { opacity: .5; }
+  tr.gap td { text-align: left; padding-left: 16px; font-size: 11px; color: var(--muted); padding: 3px; background: #f6fafa; cursor: default; }
+  .badge { display: inline-block; margin-left: 6px; padding: 2px 6px; border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 1.2; vertical-align: 1px; background: var(--ok-bg); color: var(--ok-ink); }
+  .badge.old { background: var(--line); color: var(--muted); }
 </style>
 </head>
 <body>
@@ -145,7 +162,7 @@ const ST = { 'Норма': 'ok', 'Выше нормы': 'hi', 'Ниже норм
 const MON = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 const SVGNS = 'http://www.w3.org/2000/svg';
 
-let recs = [], idx = 0, errors = [], notices = [], openKey = null;
+let recs = [], idx = 0, errors = [], notices = [], openKey = null, settings = {};
 const app = document.getElementById('app'), dlg = document.getElementById('dlg');
 
 // --- DOM: строки из PDF вставляются только как текст ---
@@ -184,15 +201,49 @@ function act(node, key) {
 function metric(key) {
   const [a, b] = key.split('.');
   if (a === 'body') return {
-    title: BODY[b], unit: recs.at(-1).body[b].unit || '',
+    title: BODY[b], unit: recs.at(-1).body[b].unit || '', better: BETTER[b] || 0,
     value: r => r.body[b].value, range: r => r.body[b].range, status: r => r.body[b].status,
   };
-  if (a === 'score') return { title: 'Оценка InBody', unit: '', value: r => r.inbody_score };
-  if (b === 'total_kg') return { title: `${BLK[a]}: всего`, unit: 'кг', value: r => r[a].total_kg };
+  if (a === 'score') return { title: 'Оценка InBody', unit: '', better: 1, value: r => r.inbody_score };
+  const better = a === 'segmental_muscle' ? 1 : -1;
+  if (b === 'total_kg') return { title: `${BLK[a]}: всего`, unit: 'кг', better, value: r => r[a].total_kg };
   return {
-    title: `${BLK[a]}: ${SEG[b].toLowerCase()}`, unit: 'кг', value: r => r[a][b].kg,
+    title: `${BLK[a]}: ${SEG[b].toLowerCase()}`, unit: 'кг', better, value: r => r[a][b].kg,
     status: r => r[a][b].status, pct: r => r[a][b].percent,
   };
+}
+// Что считать улучшением: 1 — рост, -1 — снижение, 0 — нейтрально (вес и ИМТ зависят от цели)
+const BETTER = { muscle: 1, lean_mass: 1, protein: 1, water: 1, bones: 1, fat: -1, visceral_fat: -1 };
+const tone = (d, better) => d * better > 0 ? 'good' : d * better < 0 ? 'bad' : '';
+
+// --- старт сравнения: выбирается вручную (например, после перерыва), хранится на сервере ---
+const GAP_DAYS = 30;  // промежуток больше — перерыв
+const baseIdx = () => {
+  const i = settings.start ? recs.findIndex(r => r.date >= settings.start) : 0;
+  return i < 0 ? 0 : i;
+};
+const gapBefore = i => i > 0 ? Math.round((Date.parse(recs[i].date) - Date.parse(recs[i - 1].date)) / DAY) : 0;
+
+function startSelect() {
+  const b = baseIdx();
+  return h('select', { class: 'inline', 'aria-label': 'Начало сравнения', onclick: e => e.stopPropagation(), onkeydown: e => e.stopPropagation(),
+      onchange: e => setStart(recs[+e.target.value].date) },
+    recs.map((r, i) => h('option', { value: i, selected: i === b || null },
+      dmy(r.date) + (i === 0 ? ' (первый)' : gapBefore(i) > GAP_DAYS ? ` (после перерыва ${gapBefore(i)} дн)` : ''))).reverse());
+}
+
+async function setStart(date) {
+  settings = date === recs[0].date ? {} : { start: date };
+  if (view) { view.v0 = view.v1 = null; }  // окно графика — заново от нового старта
+  render();
+  if (openKey) openChart(openKey);
+  try {
+    const res = await fetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ start: settings.start ?? null }) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (e) {
+    notices = [{ text: `Не удалось сохранить начало сравнения: ${e.message}` }];
+    render();
+  }
 }
 
 function trendIcon(up) {  // как стрелка тренда в старом макете PDF
@@ -263,17 +314,17 @@ function render() {
   };
   const zones = h('div', { class: 'scale' }, h('span', {}, 'Ниже нормы'), h('span', {}, 'Норма'), h('span', {}, 'Выше нормы'));
 
-  // прогресс от первого замера до выбранного
-  const first = recs[0];
+  // изменения от стартового замера (по умолчанию первый) до выбранного
+  const bi = baseIdx(), base = recs[bi];
   const lead = (label, key) => {
-    const m = metric(key), d = m.value(cur) - m.value(first);
-    return act(h('div', { class: 'lead' }, h('span', {}, label), h('b', {}, withUnit(signed(d), m.unit))), key);
+    const m = metric(key), d = m.value(cur) - m.value(base);
+    return act(h('div', { class: 'lead' }, h('span', {}, label), h('b', { class: tone(d, m.better) }, withUnit(signed(d), m.unit))), key);
   };
   const progress = h('div', { class: 'card' },
-    h('h3', {}, idx ? `Изменения с ${dmy(first.date)} по ${dmy(cur.date)}` : 'Это первый замер'),
-    idx ? [lead('Вес', 'body.weight'), lead('Мышцы', 'body.muscle'), lead('Жир', 'body.fat'),
+    h('h3', {}, 'Изменения с ', startSelect(), ` по ${dmy(cur.date)}`),
+    idx !== bi ? [lead('Вес', 'body.weight'), lead('Мышцы', 'body.muscle'), lead('Жир', 'body.fat'),
       lead('Жир, масса', 'segmental_fat.total_kg'), lead('Безжировая масса', 'body.lean_mass'), lead('Висцеральный жир', 'body.visceral_fat')]
-      : h('p', { class: 'muted' }, 'Сравнивать пока не с чем.'));
+      : h('p', { class: 'muted' }, 'Выбран стартовый замер — сравнивать пока не с чем.'));
 
   // сегменты: фигура из PDF + значения поверх
   const segCard = (blk, title, img) => h('div', { class: 'card' },
@@ -321,31 +372,117 @@ const DAY = 864e5;
 const COARSE = matchMedia('(pointer: coarse)').matches;
 // Масштаб и активная точка переживают перерисовку (выбор замера, поворот экрана); сброс — при смене метрики
 let view = null;
+let tableOpen = false;  // раскрытая таблица остаётся раскрытой и у следующих графиков
 
 function openChart(key) {
   openKey = key;
-  if (view?.key !== key) view = { key, v0: null, v1: null, active: null, touchY: null, lastTap: 0 };
+  if (view?.key !== key) view = { key, v0: null, v1: null, active: null, touchY: null, lastTap: 0, sort: null };
   const m = metric(key), pts = recs.filter(r => m.value(r) != null);
   const range = m.range && m.range(recs.at(-1));
-  const firstV = m.value(pts[0]), lastV = m.value(pts.at(-1));
+  // старт — первый замер с этой метрикой не раньше выбранного (оценки InBody в старых отчётах нет)
+  const startDate = recs[baseIdx()].date, bp = pts.find(r => r.date >= startDate) || pts[0];
+  const firstV = m.value(bp), lastV = m.value(pts.at(-1));
   const box = h('div', { class: 'chart' }), tools = h('div', { class: 'ctools', role: 'group', 'aria-label': 'Период' });
   dlg.replaceChildren(
     h('div', { class: 'dhead' },
       h('div', {}, h('h2', {}, m.title),
-        h('p', {}, `${pts.length} замеров, ${dmy(pts[0].date)} — ${dmy(pts.at(-1).date)}: `,
-          h('b', {}, `${withUnit(firstV, m.unit)} → ${withUnit(lastV, m.unit)} (${signed(lastV - firstV)})`),
+        h('p', {}, 'С ', startSelect(), ` по ${dmy(pts.at(-1).date)}: `,
+          h('b', {}, `${withUnit(firstV, m.unit)} → ${withUnit(lastV, m.unit)} `, h('span', { class: tone(lastV - firstV, m.better) }, `(${signed(lastV - firstV)})`)),
+          bp.date !== startDate ? ` — первое значение ${dmy(bp.date)}` : '',
           range ? `. Зелёная полоса — норма ${range[0]}–${range[1]}` : '')),
       h('button', { class: 'x', type: 'button', 'aria-label': 'Закрыть', onclick: () => dlg.close() }, '×')),
     tools, box,
     h('p', { class: 'hint' }, COARSE
       ? 'Ведите пальцем — значения; щипок — масштаб, два пальца — сдвиг; двойной тап — весь период.'
       : 'Колесо — масштаб, перетаскивание — сдвиг, клик — выбрать замер, двойной клик — весь период. С клавиатуры: ← → + − 0.'),
-    h('details', {}, h('summary', {}, 'Таблица'),
-      h('table', {}, h('tr', {}, h('th', {}, 'Дата'), h('th', {}, 'Значение'), m.range ? h('th', {}, 'Норма') : null, m.status ? h('th', {}, 'Статус') : null, m.pct ? h('th', {}, '% от нормы') : null),
-        [...pts].reverse().map(r => h('tr', {}, h('td', {}, dmy(r.date)), h('td', {}, withUnit(m.value(r), m.unit)),
-          m.range ? h('td', {}, m.range(r).join('–')) : null, m.status ? h('td', {}, m.status(r)) : null, m.pct ? h('td', {}, fmt(m.pct(r))) : null)))));
+    h('details', { open: tableOpen || null, ontoggle: e => { tableOpen = e.target.open; } },
+      h('summary', {}, 'Таблица'), dataTable(m, pts)));
   if (!dlg.open) dlg.showModal();
   drawChart(box, tools, m, pts);
+}
+
+// --- таблица под графиком: сортировка, лучший результат, мягкий градиент, изменения ---
+function dataTable(m, pts) {
+  const startDate = recs[baseIdx()].date, inPeriod = r => r.date >= startDate;
+  const per = pts.filter(inPeriod), vals = per.map(m.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  // лучший — за период со старта; рекорд — за всё время, если он был до старта
+  const extreme = (list, sign) => list.reduce((a, r) => (m.value(r) - m.value(a)) * sign > 0 ? r : a);
+  const best = m.better && per.length > 1 ? extreme(per, m.better) : null;
+  const worst = best && extreme(per, -m.better);
+  const record = m.better && pts.length > 1 ? extreme(pts, m.better) : null;
+  const maxR = !m.better && per.length > 1 ? per.find(r => m.value(r) === hi) : null;
+  const minR = maxR && per.find(r => m.value(r) === lo);
+  const prevOf = new Map(pts.map((r, i) => [r, pts[i - 1]]));
+  const dPrev = r => prevOf.get(r) ? r2(m.value(r) - m.value(prevOf.get(r))) : null;
+  const dBase = r => inPeriod(r) && per.length ? r2(m.value(r) - m.value(per[0])) : null;
+  const days = (a, b) => Math.round((Date.parse(a.date) - Date.parse(b.date)) / DAY);
+  // фон значения: чем лучше (у нейтральных — чем больше), тем гуще; не больше ~18 %
+  const shade = r => {
+    if (!inPeriod(r) || hi === lo) return null;
+    const g = (m.value(r) - lo) / (hi - lo), k = m.better < 0 ? 1 - g : g;
+    return `background-color: rgb(${m.better ? '18 183 106' : '128 98 184'} / ${(.03 + k * .15).toFixed(3)})`;
+  };
+  const badge = r => r === best ? h('span', { class: 'badge' }, 'лучший')
+    : r === record && !inPeriod(r) ? h('span', { class: 'badge old' }, 'рекорд')
+    : r === maxR ? h('span', { class: 'badge old' }, 'макс') : r === minR ? h('span', { class: 'badge old' }, 'мин') : null;
+  const dCell = d => d == null ? h('td', { class: 'muted' }, '—') : h('td', { class: tone(d, m.better) }, signed(d));
+  const ranges = new Set(m.range ? pts.map(r => m.range(r).join('–')) : []);
+  const cols = [
+    { id: 'date', label: 'Дата', key: r => r.date, td: r => h('td', {}, dmy(r.date)) },
+    { id: 'value', label: 'Значение', key: m.value, td: r => h('td', { style: shade(r) }, withUnit(m.value(r), m.unit), badge(r)) },
+    { id: 'prev', label: 'К прошлому', key: dPrev, td: r => dCell(dPrev(r)) },
+    per.length && { id: 'base', label: `От ${dmy(per[0].date)}`, key: dBase, td: r => dCell(dBase(r)) },
+    m.status && { id: 'status', label: 'Статус', key: m.status, td: r => h('td', {}, h('span', { class: `st ${cls(m.status(r))}` }, m.status(r))) },
+    m.pct && { id: 'pct', label: '% нормы', key: m.pct, td: r => h('td', {}, fmt(m.pct(r))) },
+    ranges.size > 1 && { id: 'range', label: 'Норма', key: r => m.range(r)[0], td: r => h('td', {}, m.range(r).join('–')) },
+  ].filter(Boolean);
+
+  const pick = r => {  // строка -> выбрать замер и показать его на графике
+    view.active = r.date; view.touchY = null;
+    const t = Date.parse(r.date), span = view.v1 - view.v0;
+    if (t < view.v0 || t > view.v1) { view.v0 = t - span / 2; view.v1 = t + span / 2; }
+    const i = recs.indexOf(r);
+    i === idx ? openChart(openKey) : setIdx(i);
+  };
+
+  const at = r => [h('b', {}, withUnit(m.value(r), m.unit)), ` (${dmy(r.date)})`];
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  const stats = h('p', { class: 'stats' }, `С ${dmy(startDate)}: `,
+    !per.length ? 'значений нет'
+      : [best ? ['лучший ', at(best), ' · худший ', at(worst), ' · '] : maxR ? ['мин ', at(minR), ' · макс ', at(maxR), ' · '] : '',
+        `среднее ${withUnit(r2(avg), m.unit)} · замеров ${per.length}`,
+        record && !inPeriod(record) ? [' · рекорд за всё время ', at(record)] : '']);
+
+  const wrap = h('div');
+  const draw = () => {
+    const sort = view.sort || { id: 'date', dir: -1 };
+    const col = cols.find(c => c.id === sort.id) || cols[0];
+    const rows = [...pts].sort((a, b) => {
+      const ka = col.key(a), kb = col.key(b);
+      if (ka == null || kb == null) return (ka == null) - (kb == null);  // пустые — всегда в конце
+      return (ka < kb ? -1 : ka > kb ? 1 : 0) * sort.dir;
+    });
+    const body = [];
+    for (const r of rows) {  // при сортировке по дате между строками видны перерывы
+      const prev = prevOf.get(r), gap = prev ? days(r, prev) : 0;
+      const gapRow = gap > GAP_DAYS && col.id === 'date' && h('tr', { class: 'gap' }, h('td', { colspan: cols.length }, `перерыв ${gap} дн`));
+      if (gapRow && sort.dir > 0) body.push(gapRow);
+      body.push(h('tr', { class: `${inPeriod(r) ? '' : 'old'} ${r.date === recs[idx].date ? 'sel' : ''}`, tabindex: 0,
+        onclick: () => pick(r), onkeydown: e => { if (e.key === 'Enter') pick(r); } }, cols.map(c => c.td(r))));
+      if (gapRow && sort.dir < 0) body.push(gapRow);
+    }
+    const head = h('tr', {}, cols.map(c => h('th', { 'aria-sort': c === col ? (sort.dir > 0 ? 'ascending' : 'descending') : null },
+      h('button', { type: 'button', onclick: () => {
+        // повторный клик — обратный порядок; новый столбец — сначала лучшие (у дат — новые)
+        const firstDir = ['value', 'prev', 'base'].includes(c.id) && m.better < 0 ? 1 : -1;
+        view.sort = { id: c.id, dir: c === col ? -sort.dir : firstDir };
+        draw();
+      } }, c.label, h('span', { class: 'arrow', 'aria-hidden': 'true' }, c === col ? (sort.dir > 0 ? '▲' : '▼') : '')))));
+    wrap.replaceChildren(stats, h('div', { class: 'tablewrap' }, h('table', {}, h('thead', {}, head), h('tbody', {}, body))));
+  };
+  draw();
+  return wrap;
 }
 dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
 dlg.addEventListener('close', () => { openKey = null; view = null; });
@@ -390,7 +527,10 @@ function drawChart(box, tools, m, recsWithValue) {
     a = Math.min(Math.max(a, f0), f1 - span);
     return [a, a + span];
   };
-  [view.v0, view.v1] = clampView(view.v0 ?? f0, view.v1 ?? f1);
+  // старт сравнения: по умолчанию график открывается с него, всё до него приглушено
+  const startDate = recs[baseIdx()].date, baseT = Date.parse(startDate), hasBase = baseT > pts[0].t;
+  const startV0 = baseT - (f1 - baseT) * .04;
+  [view.v0, view.v1] = clampView(view.v0 ?? (hasBase ? startV0 : f0), view.v1 ?? f1);
 
   const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, tabindex: 0, role: 'img', 'aria-label': `${m.title}: график по датам` });
   const layer = s('g');
@@ -400,14 +540,14 @@ function drawChart(box, tools, m, recsWithValue) {
   svg.append(s('defs', {}, s('clipPath', { id: 'plot-clip' }, s('rect', { x: L, y: T, width: PW, height: PH }))), layer, vline, ring);
   box.replaceChildren(svg, tip);
 
-  const PRESETS = [['Месяц', 30], ['3 мес', 91], ['Полгода', 182], ['Всё', 0]];
-  const presetBtns = PRESETS.map(([label, days]) =>
-    h('button', { type: 'button', onclick: () => days ? setView(f1 - days * DAY, f1) : setView(f0, f1) }, label));
+  const PRESETS = [['Месяц', () => [f1 - 30 * DAY, f1]], ['3 мес', () => [f1 - 91 * DAY, f1]], ['Полгода', () => [f1 - 182 * DAY, f1]],
+    ...(hasBase ? [[`С ${dmy(startDate)}`, () => [startV0, f1]]] : []), ['Всё', () => [f0, f1]]];
+  const presetBtns = PRESETS.map(([label, win]) => h('button', { type: 'button', onclick: () => setView(...win()) }, label));
   tools.replaceChildren(...presetBtns);
 
   let x = null, y = null, frame = 0;
   function paint() {
-    const { v0, v1 } = view, span = v1 - v0, full = span >= f1 - f0 - 1;
+    const { v0, v1 } = view, span = v1 - v0;
     x = t => L + (t - v0) / span * PW;
     // Шкала Y — по точкам в окне (если в окне пусто — по ближайшим соседям)
     let vis = pts.filter(p => p.t >= v0 && p.t <= v1);
@@ -438,12 +578,18 @@ function drawChart(box, tools, m, recsWithValue) {
     kids.push(s('line', { x1: L, x2: L + PW, y1: T + PH, y2: T + PH, stroke: 'var(--rule)' }),
       s('path', { ...clip, d: pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t)},${y(p.v)}`).join(''), fill: 'none', stroke: 'var(--series)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }),
       ...pts.map(p => s('circle', { ...clip, cx: x(p.t), cy: y(p.v), r: p.r.date === sel ? 6 : 4, fill: p.r.date === sel ? 'var(--ink)' : 'var(--series)', stroke: '#fff', 'stroke-width': 2 })));
+    if (hasBase && x(baseT) > L) {  // до старта — под белой дымкой, на старте — отметка
+      const bx = Math.min(x(baseT), L + PW);
+      kids.push(s('rect', { x: L, y: T, width: bx - L, height: PH, fill: '#fff', 'fill-opacity': .6 }));
+      if (bx < L + PW) kids.push(s('line', { x1: bx, x2: bx, y1: T, y2: T + PH, stroke: 'var(--ink)', 'stroke-opacity': .35 }),
+        s('text', { x: bx + 4, y: T + 10 }, 'старт'));
+    }
     if (last.t <= v1) kids.push(s('text', { class: 'end', x: x(last.t) + 10, y: y(last.v) + 4 }, withUnit(last.v, m.unit)));
     layer.replaceChildren(...kids);
 
     presetBtns.forEach((b, i) => {
-      const days = PRESETS[i][1];
-      b.setAttribute('aria-pressed', days ? !full && Math.abs(v1 - f1) < DAY && Math.abs(span - days * DAY) < DAY : full);
+      const [a, c] = clampView(...PRESETS[i][1]());
+      b.setAttribute('aria-pressed', Math.abs(a - v0) < DAY && Math.abs(c - v1) < DAY);
     });
     const ai = pts.findIndex(p => p.r.date === view.active);
     ai >= 0 ? show(ai) : hide();
@@ -641,7 +787,7 @@ addEventListener('drop', e => {
 async function load(date) {
   try {
     const d = await fetch('/api/data').then(r => r.json());
-    recs = d.records; errors = d.errors;
+    recs = d.records; errors = d.errors; settings = d.settings || {};
   } catch (e) {
     errors = [`Не удалось загрузить данные: ${e}`];
   }

@@ -6,8 +6,10 @@ PDF из папки «результаты» (или INBODY_PDFS) разбира
 import functools
 import json
 import os
+import re
 import sys
 import tempfile
+from datetime import date
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -36,7 +38,15 @@ def records():
             data.append(parse_cached(p, p.stat().st_mtime))
         except Exception as e:
             errors.append(f"{p.name}: {e}")
-    return {"records": sorted(data, key=lambda d: d["date"]), "errors": errors}
+    return {"records": sorted(data, key=lambda d: d["date"]), "errors": errors, "settings": load_settings()}
+
+
+def load_settings():
+    """Настройки сайта рядом с PDF: {"start": "ГГГГ-ММ-ДД"} — с какого замера считать изменения."""
+    try:
+        return json.loads((PDFS / "settings.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return {}
 
 
 def hexc(c):
@@ -119,6 +129,8 @@ class Handler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
+        if self.path == "/api/settings":
+            return self.save_settings()
         if self.path != "/api/upload":
             return self.send_error(404)
         size = int(self.headers.get("Content-Length") or 0)
@@ -143,6 +155,23 @@ class Handler(SimpleHTTPRequestHandler):
         PDFS.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
         self.send_json({"date": date}, 201)
+
+    def save_settings(self):
+        size = int(self.headers.get("Content-Length") or 0)
+        try:
+            start = json.loads(self.rfile.read(size) if 0 < size <= 4096 else b"")["start"]
+            if start is not None and not (isinstance(start, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", start)):
+                raise ValueError(start)
+            if start:
+                date.fromisoformat(start)
+        except (ValueError, KeyError, TypeError):
+            return self.send_json({"error": 'Ожидается {"start": "ГГГГ-ММ-ДД"} или {"start": null}'}, 400)
+        settings = {"start": start} if start else {}
+        PDFS.mkdir(parents=True, exist_ok=True)
+        tmp = PDFS / "settings.json.tmp"
+        tmp.write_text(json.dumps(settings), encoding="utf-8")
+        tmp.replace(PDFS / "settings.json")
+        self.send_json(settings)
 
     def send_json(self, obj, code=200):
         self.send(json.dumps(obj, ensure_ascii=False), "application/json", code)
