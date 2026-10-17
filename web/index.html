@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InBody — динамика</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #003e47; --muted: #6a7a7c; --line: #e4eeee; --rule: #a6b6b8; --hover: #b9d3d3;
+    --ok: #12b76a; --ok-bg: #c7fbe1; --ok-ink: #0f8a50;
+    --hi: #ff7d20; --hi-bg: #ffe3cc; --hi-ink: #c95500;
+    --lo: #12d8d8; --lo-bg: #cdf6f6; --lo-ink: #08807f;
+    --series: #8062b8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fff; color: var(--ink); font: 500 14px/1.35 "Onest", system-ui, sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 16px; display: grid; gap: 12px; }
+  .row { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; }
+  .row.top { grid-template-columns: 1fr 2fr; }
+  .stack { display: grid; gap: 12px; align-content: start; }
+  @media (max-width: 760px) { .row, .row.top { grid-template-columns: 1fr; } }
+  .card { border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; background: #fff; min-width: 0; }
+  .click { cursor: pointer; transition: border-color .15s, background-color .15s; }
+  .click:hover, .click:focus-visible { border-color: var(--hover); outline: none; }
+  .muted { color: var(--muted); }
+  .error { background: var(--hi-bg); border-radius: 12px; padding: 10px 14px; }
+
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; padding: 4px 2px 6px; }
+  header .brand { font-weight: 800; font-size: 20px; margin-right: auto; }
+  header .brand span { color: var(--series); }
+  header .k { color: var(--muted); font-weight: 700; margin-right: 5px; }
+  header b { font-weight: 700; }
+  select { font: inherit; font-weight: 700; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; }
+
+  .pill { display: inline-block; font-size: 12px; font-weight: 500; line-height: 1; padding: 5px 10px; border-radius: 999px; white-space: nowrap; }
+  .ok { --c: var(--ok); --c-bg: var(--ok-bg); --c-ink: var(--ok-ink); }
+  .hi { --c: var(--hi); --c-bg: var(--hi-bg); --c-ink: var(--hi-ink); }
+  .lo { --c: var(--lo); --c-bg: var(--lo-bg); --c-ink: var(--lo-ink); }
+  .pill { background: var(--c-bg); color: var(--c-ink); }
+  .st { color: var(--c-ink); font-weight: 500; }
+
+  .metric { display: flex; flex-direction: column; gap: 18px; }
+  .metric .head { display: flex; justify-content: space-between; align-items: center; font-size: 15px; }
+  .big { font-size: 34px; font-weight: 700; line-height: 1; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .trend { display: inline-flex; align-items: center; gap: 3px; font-size: 13px; font-weight: 500; color: var(--muted); }
+  .trend svg { width: 14px; height: 9px; }
+
+  .score { display: flex; justify-content: space-between; gap: 16px; }
+  .score .big span { font-size: 22px; font-weight: 500; color: var(--muted); }
+  .score p { margin: 0; max-width: 230px; font-size: 11px; color: var(--muted); }
+
+  .hist .hrow { display: grid; grid-template-columns: var(--cols); align-items: start; }
+  .hist .hrow + .hrow + .hrow { border-top: 1px solid var(--line); }
+  .hist .hrow.click { border-radius: 8px; }
+  .hist .hrow.click:hover, .hist .hrow.click:focus-visible { background: #f6fafa; }
+  .hist .title { font-weight: 700; color: var(--muted); padding-bottom: 4px; }
+  .hist .d { font-size: 10px; color: var(--muted); text-align: center; padding-top: 3px; }
+  .hist .lbl { font-weight: 700; padding: 10px 0 0 2px; }
+  .hist .v { font-weight: 700; text-align: center; padding-top: 10px; border-left: 1px solid var(--line); height: 34px; }
+  .hist svg { grid-column: 2 / -1; display: block; width: 100%; height: 30px; }
+
+  .scale { display: grid; grid-template-columns: repeat(3, 1fr); font-size: 10px; color: var(--muted); }
+  .scale :nth-child(2) { text-align: center; } .scale :nth-child(3) { text-align: right; }
+  .rrow { display: block; padding: 9px 6px 3px; margin: 0 -6px; border-radius: 8px; }
+  .rrow.click:hover, .rrow.click:focus-visible { background: #f6fafa; }
+  .rrow .head { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; }
+  .rrow .st { margin-left: 8px; }
+  .bar { position: relative; display: flex; gap: 2px; height: 5px; margin: 7px 0 5px; }
+  .bar i { flex: 1; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .bar b { display: block; height: 100%; background: var(--c); }
+  .bar .dot { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 2px solid var(--c); transform: translate(-50%, -50%); }
+
+  .lead { display: flex; align-items: baseline; gap: 6px; padding: 7px 6px; margin: 0 -6px; border-radius: 8px; }
+  .lead::after { content: ""; order: 1; flex: 1; border-bottom: 1px solid var(--rule); }
+  .lead b { order: 2; font-weight: 700; }
+  .lead.click:hover, .lead.click:focus-visible { background: #f6fafa; }
+  h3 { margin: 0 0 4px; font-size: 14px; font-weight: 700; }
+
+  .seghead { display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 10px; }
+  .fig { position: relative; aspect-ratio: 233.4 / 188.8; container-type: inline-size; }
+  .fig img { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .q { all: unset; position: absolute; width: 49.6%; height: 49.5%; border-radius: 10px; cursor: pointer; }
+  .q:hover, .q:focus-visible { background: rgba(0, 62, 71, .05); box-shadow: inset 0 0 0 1px var(--hover); }
+  .q.la { left: 0; top: 0; } .q.ra { right: 0; top: 0; } .q.ll { left: 0; bottom: 0; } .q.rl { right: 0; bottom: 0; }
+  .q.trunk { left: 34%; width: 32%; top: 33%; height: 30%; z-index: 1; display: flex; justify-content: center; }
+  .q .c { position: absolute; display: flex; flex-direction: column; gap: 1.2cqw; }
+  .la .c, .ra .c { top: 23.5%; } .ll .c, .rl .c { bottom: 18%; }
+  .la .c, .ll .c { left: 6.5%; align-items: flex-start; } .ra .c, .rl .c { right: 6.8%; align-items: flex-end; }
+  .trunk .c { position: static; align-items: center; padding-top: 4%; white-space: nowrap; }
+  .q .kg { font-size: 6.4cqw; font-weight: 500; line-height: 1; }
+  .q .pill { font-size: max(10px, 2.6cqw); padding: .5cqw 2.2cqw; }
+  .q .st { font-size: max(10px, 2.8cqw); }
+
+  dialog { border: 0; border-radius: 16px; padding: 18px 20px 20px; width: min(860px, calc(100vw - 24px)); color: var(--ink); }
+  dialog::backdrop { background: rgba(0, 30, 35, .35); }
+  .dhead { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+  .dhead h2 { margin: 0; font-size: 20px; }
+  .dhead p { margin: 4px 0 0; color: var(--muted); }
+  .x { all: unset; cursor: pointer; font-size: 26px; line-height: 1; padding: 0 6px; color: var(--muted); }
+  .x:hover, .x:focus-visible { color: var(--ink); }
+  .chart { position: relative; margin: 14px 0 8px; }
+  .chart svg { display: block; width: 100%; height: 300px; overflow: visible; outline: none; }
+  .chart text { font: 500 11px "Onest", system-ui, sans-serif; fill: var(--muted); font-variant-numeric: tabular-nums; }
+  .chart text.end { fill: var(--ink); font-weight: 700; font-size: 12px; }
+  .tip { position: absolute; pointer-events: none; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 12px; white-space: nowrap; box-shadow: 0 4px 16px rgba(0, 40, 50, .12); }
+  .tip b { display: block; font-size: 15px; }
+  details summary { cursor: pointer; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; }
+  th { color: var(--muted); font-weight: 500; }
+  th:first-child, td:first-child { text-align: left; }
+</style>
+</head>
+<body>
+<main id="app"><p class="muted">Загрузка…</p></main>
+<dialog id="dlg"></dialog>
+<script>
+const BODY = { weight: 'Вес', muscle: 'Мышцы', fat: 'Жир', water: 'Вода', protein: 'Белок', bones: 'Кости',
+               visceral_fat: 'Висцеральный жир', bmi: 'Индекс массы тела', lean_mass: 'Безжировая масса' };
+const SEG = { left_arm: 'Левая рука', right_arm: 'Правая рука', trunk: 'Торс', left_leg: 'Левая нога', right_leg: 'Правая нога' };
+const BLK = { segmental_muscle: 'Мышцы', segmental_fat: 'Жир' };
+const ST = { 'Норма': 'ok', 'Выше нормы': 'hi', 'Ниже нормы': 'lo' };
+const MON = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+let recs = [], idx = 0, errors = [], openKey = null;
+const app = document.getElementById('app'), dlg = document.getElementById('dlg');
+
+// --- DOM: строки из PDF вставляются только как текст ---
+function el(ns, tag, props, kids) {
+  const e = ns ? document.createElementNS(ns, tag) : document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
+  }
+  e.append(...kids.flat(9).filter(k => k != null && k !== false));
+  return e;
+}
+const h = (tag, props, ...kids) => el(null, tag, props, kids);
+const s = (tag, props, ...kids) => el(SVGNS, tag, props, kids);
+
+// --- форматирование ---
+const r2 = v => Math.round(v * 100) / 100;
+const fmt = v => String(r2(v));
+const withUnit = (v, u) => (typeof v === 'number' ? fmt(v) : v) + (u ? ` ${u}` : '');
+const signed = v => (v > 0 ? '+' : '') + fmt(v);
+const dmy = iso => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(2, 4)}`;
+const cls = status => ST[status] || 'ok';
+const pill = (text, status) => h('span', { class: `pill ${cls(status)}` }, text);
+
+// Карточка/строка открывает график метрики
+function act(node, key) {
+  node.classList.add('click');
+  node.tabIndex = 0;
+  node.setAttribute('role', 'button');
+  node.addEventListener('click', () => openChart(key));
+  node.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openChart(key); } });
+  return node;
+}
+
+// --- метрики: ключ -> как достать значение из замера ---
+function metric(key) {
+  const [a, b] = key.split('.');
+  if (a === 'body') return {
+    title: BODY[b], unit: recs.at(-1).body[b].unit || '',
+    value: r => r.body[b].value, range: r => r.body[b].range, status: r => r.body[b].status,
+  };
+  if (a === 'score') return { title: 'Оценка InBody', unit: '', value: r => r.inbody_score };
+  if (b === 'total_kg') return { title: `${BLK[a]}: всего`, unit: 'кг', value: r => r[a].total_kg };
+  return {
+    title: `${BLK[a]}: ${SEG[b].toLowerCase()}`, unit: 'кг', value: r => r[a][b].kg,
+    status: r => r[a][b].status, pct: r => r[a][b].percent,
+  };
+}
+
+function trendIcon(up) {  // как стрелка тренда в старом макете PDF
+  const pts = up ? '1,8 5,4 8,6.5 13,1.5' : '1,1.5 5,5.5 8,3 13,8';
+  const tip = up ? 'M9.5 1.5H13V5' : 'M9.5 8H13V4.5';
+  return s('svg', { viewBox: '0 0 14 9.5', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' },
+    s('polyline', { points: pts }), s('path', { d: tip }));
+}
+
+// --- рендер дашборда ---
+function render() {
+  if (!recs.length) {
+    app.replaceChildren(h('p', { class: 'error' }, 'Нет данных: положите PDF в папку «результаты» и обновите страницу.'), ...errors.map(e => h('p', { class: 'error' }, e)));
+    return;
+  }
+  const cur = recs[idx], prev = recs[idx - 1];
+  const after = [];
+
+  const select = h('select', { 'aria-label': 'Дата замера', onchange: e => setIdx(+e.target.value) },
+    recs.map((r, i) => h('option', { value: i, selected: i === idx || null }, dmy(r.date))).reverse());
+  const header = h('header', {},
+    h('div', { class: 'brand' }, 'InBody ', h('span', {}, '· динамика')),
+    [['Имя', cur.name], ['Пол', cur.sex], ['Возраст', cur.age], ['Рост', `${cur.height_cm} см`]].map(([k, v]) => h('div', {}, h('span', { class: 'k' }, k), h('b', {}, v))),
+    h('label', {}, h('span', { class: 'k' }, 'Дата'), select));
+
+  // карточки Вес / Мышцы / Жир
+  const cards = ['weight', 'muscle', 'fat'].map(k => {
+    const m = cur.body[k];
+    const d = prev && r2(m.value - prev.body[k].value);
+    return act(h('div', { class: 'card metric' },
+      h('div', { class: 'head' }, h('span', {}, BODY[k]), pill(m.status, m.status)),
+      h('div', { class: 'big' }, withUnit(m.value, m.unit),
+        d ? h('span', { class: 'trend', title: `к замеру ${dmy(prev.date)}` }, trendIcon(d > 0), fmt(Math.abs(d))) : null)), `body.${k}`);
+  });
+
+  const score = act(h('div', { class: 'card score' },
+    h('div', { class: 'metric' }, h('div', { class: 'head' }, 'Оценка InBody'),
+      cur.inbody_score == null ? h('div', { class: 'big muted' }, '—') : h('div', { class: 'big' }, cur.inbody_score, h('span', {}, '/100'))),
+    h('p', {}, cur.inbody_score == null ? 'В этом отчёте оценки нет — она появилась в новом формате PDF.'
+      : 'Общая оценка состава тела и телосложения. С развитой мускулатурой можно набрать больше 100 баллов.')), 'score');
+
+  // история: последние N замеров до выбранного
+  const width = app.clientWidth - 32;
+  const histW = width > 760 ? (width - 12) * 2 / 3 - 34 : width - 34;
+  const n = Math.max(3, Math.min(9, Math.floor((histW - 96) / 52)));
+  const list = recs.slice(Math.max(0, idx - n + 1), idx + 1);
+  const cols = `96px repeat(${list.length}, minmax(0, 1fr))`;
+  const hrow = (k, label) => {
+    const vals = list.map(r => r.body[k].value);
+    const svg = s('svg', { 'aria-hidden': 'true' });
+    after.push(() => sparkline(svg, vals));
+    return act(h('div', { class: 'hrow', style: `--cols:${cols}` }, h('div', { class: 'lbl' }, label),
+      vals.map(v => h('div', { class: 'v' }, fmt(v).replace('.', ','))), h('div', {}), svg), `body.${k}`);
+  };
+  const hist = h('div', { class: 'card hist' }, h('div', { class: 'title' }, 'История состава тела'),
+    h('div', { class: 'hrow', style: `--cols:${cols}` }, h('div', {}), list.map(r => h('div', { class: 'd' }, dmy(r.date)))),
+    hrow('weight', 'Вес, кг'), hrow('muscle', 'Мышцы, кг'), hrow('fat', 'Жир, %'));
+
+  // шкалы норм
+  const rrow = k => {
+    const m = cur.body[k], p = scalePos(m.value, m.range), c = cls(m.status);
+    return act(h('div', { class: `rrow ${c}` },
+      h('div', { class: 'head' }, h('span', {}, BODY[k], m.status !== 'Норма' ? h('span', { class: 'st' }, m.status) : null), h('span', {}, withUnit(m.value, m.unit))),
+      h('div', { class: 'bar' }, [0, 1, 2].map(i => h('i', {}, h('b', { style: `width:${Math.min(1, Math.max(0, p * 3 - i)) * 100}%` }))),
+        h('span', { class: 'dot', style: `left:${p * 100}%` })),
+      h('div', { class: 'scale' }, h('span', {}, `< ${m.range[0]}`), h('span', {}, `${m.range[0]}–${m.range[1]}`), h('span', {}, `> ${m.range[1]}`))), `body.${k}`);
+  };
+  const zones = h('div', { class: 'scale' }, h('span', {}, 'Ниже нормы'), h('span', {}, 'Норма'), h('span', {}, 'Выше нормы'));
+
+  // прогресс от первого замера до выбранного
+  const first = recs[0];
+  const lead = (label, key) => {
+    const m = metric(key), d = m.value(cur) - m.value(first);
+    return act(h('div', { class: 'lead' }, h('span', {}, label), h('b', {}, withUnit(signed(d), m.unit))), key);
+  };
+  const progress = h('div', { class: 'card' },
+    h('h3', {}, idx ? `Изменения с ${dmy(first.date)} по ${dmy(cur.date)}` : 'Это первый замер'),
+    idx ? [lead('Вес', 'body.weight'), lead('Мышцы', 'body.muscle'), lead('Жир', 'body.fat'),
+      lead('Жир, масса', 'segmental_fat.total_kg'), lead('Безжировая масса', 'body.lean_mass'), lead('Висцеральный жир', 'body.visceral_fat')]
+      : h('p', { class: 'muted' }, 'Сравнивать пока не с чем.'));
+
+  // сегменты: фигура из PDF + значения поверх
+  const segCard = (blk, title, img) => h('div', { class: 'card' },
+    act(h('div', { class: 'seghead' }, h('span', {}, title), h('span', {}, withUnit(cur[blk].total_kg, 'кг'))), `${blk}.total_kg`),
+    h('div', { class: 'fig' }, h('img', { src: img, alt: '', onerror: e => e.target.remove() }),
+      [['left_arm', 'la'], ['right_arm', 'ra'], ['trunk', 'trunk'], ['left_leg', 'll'], ['right_leg', 'rl']].map(([k, pos]) => {
+        const g = cur[blk][k], c = cls(g.status);
+        const kg = h('span', { class: 'kg' }, withUnit(g.kg, 'кг')), pc = pill(`${fmt(g.percent)} %`, g.status);
+        const st = h('span', { class: `st ${c}` }, g.status);
+        // порядок строк как в PDF: сверху кг первыми, снизу — последними
+        const parts = pos === 'trunk' ? [h('span', {}, 'Торс ', st), kg, pc] : pos === 'll' || pos === 'rl' ? [st, pc, kg] : [kg, pc, st];
+        return h('button', { class: `q ${pos}`, type: 'button', 'aria-label': `${title}: ${SEG[k]}`, onclick: () => openChart(`${blk}.${k}`) },
+          h('span', { class: 'c' }, parts));
+      })));
+
+  app.replaceChildren(header, ...errors.map(e => h('p', { class: 'error' }, e)),
+    h('div', { class: 'row top' }, h('div', { class: 'stack' }, cards), h('div', { class: 'stack' }, score, hist)),
+    h('div', { class: 'row' },
+      h('div', { class: 'card' }, zones, ['weight', 'muscle', 'fat', 'water', 'protein', 'bones'].map(rrow)),
+      h('div', { class: 'stack' }, h('div', { class: 'card' }, zones.cloneNode(true), ['visceral_fat', 'bmi', 'lean_mass'].map(rrow)), progress)),
+    h('div', { class: 'row' }, segCard('segmental_muscle', 'Содержание мышц', '/figure/muscle.svg'), segCard('segmental_fat', 'Содержание жира', '/figure/fat.svg')));
+  after.forEach(f => f());
+}
+
+// Положение на шкале как в PDF: три равные зоны, ниже нормы 0..lo, выше нормы hi..hi+(hi-lo)
+function scalePos(v, [lo, hi]) {
+  if (v < lo) return Math.max(0, v / lo) / 3;
+  if (v > hi) return 2 / 3 + Math.min(1, (v - hi) / (hi - lo)) / 3;
+  return 1 / 3 + (v - lo) / (hi - lo) / 3;
+}
+
+function sparkline(svg, vals) {
+  const W = svg.clientWidth, H = 30, cw = W / vals.length;
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const pt = (v, i) => [(i + .5) * cw, 7 + (hi - v) / span * (H - 14)];
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.replaceChildren(
+    ...vals.map((_, i) => s('line', { x1: i * cw + .5, x2: i * cw + .5, y1: 0, y2: H, stroke: 'var(--line)' })),
+    s('polyline', { points: vals.map((v, i) => pt(v, i).join(',')).join(' '), fill: 'none', stroke: 'var(--series)', 'stroke-width': 1.5, 'stroke-linejoin': 'round' }),
+    ...vals.map((v, i) => s('circle', { cx: pt(v, i)[0], cy: pt(v, i)[1], r: 3.5, fill: 'var(--series)', stroke: '#fff', 'stroke-width': 1.5 })));
+}
+
+// --- окно с графиком ---
+function openChart(key) {
+  openKey = key;
+  const m = metric(key), pts = recs.filter(r => m.value(r) != null);
+  const range = m.range && m.range(recs.at(-1));
+  const firstV = m.value(pts[0]), lastV = m.value(pts.at(-1));
+  const box = h('div', { class: 'chart' });
+  dlg.replaceChildren(
+    h('div', { class: 'dhead' },
+      h('div', {}, h('h2', {}, m.title),
+        h('p', {}, `${pts.length} замеров, ${dmy(pts[0].date)} — ${dmy(pts.at(-1).date)}: `,
+          h('b', {}, `${withUnit(firstV, m.unit)} → ${withUnit(lastV, m.unit)} (${signed(lastV - firstV)})`),
+          range ? `. Зелёная полоса — норма ${range[0]}–${range[1]}` : '')),
+      h('button', { class: 'x', type: 'button', 'aria-label': 'Закрыть', onclick: () => dlg.close() }, '×')),
+    box,
+    h('details', {}, h('summary', {}, 'Таблица'),
+      h('table', {}, h('tr', {}, h('th', {}, 'Дата'), h('th', {}, 'Значение'), m.range ? h('th', {}, 'Норма') : null, m.status ? h('th', {}, 'Статус') : null, m.pct ? h('th', {}, '% от нормы') : null),
+        [...pts].reverse().map(r => h('tr', {}, h('td', {}, dmy(r.date)), h('td', {}, withUnit(m.value(r), m.unit)),
+          m.range ? h('td', {}, m.range(r).join('–')) : null, m.status ? h('td', {}, m.status(r)) : null, m.pct ? h('td', {}, fmt(m.pct(r))) : null)))));
+  if (!dlg.open) dlg.showModal();
+  drawChart(box, m, pts);
+}
+dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
+dlg.addEventListener('close', () => { openKey = null; });
+
+function niceStep(span, n = 4) {
+  const raw = span / n, p = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map(k => k * p).find(st => st >= raw);
+}
+
+function drawChart(box, m, recsWithValue) {
+  const pts = recsWithValue.map(r => ({ r, t: Date.parse(r.date), v: m.value(r) }));
+  const W = box.clientWidth, H = 300, L = 40, R = 70, T = 12, B = 26, DAY = 864e5;
+  let t0 = pts[0].t, t1 = pts.at(-1).t;
+  if (t0 === t1) { t0 -= 7 * DAY; t1 += 7 * DAY; }
+  let lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
+  const pad = Math.max((hi - lo) * .15, Math.abs(hi) * .01, .1);
+  const step = niceStep(hi - lo + 2 * pad);
+  lo = Math.floor((lo - pad) / step) * step; hi = Math.ceil((hi + pad) / step) * step;
+  const x = t => L + (t - t0) / (t1 - t0) * (W - L - R), y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, tabindex: 0, role: 'img', 'aria-label': `${m.title}: график по датам` });
+  const clip = 'plot-clip';
+  svg.append(s('defs', {}, s('clipPath', { id: clip }, s('rect', { x: L, y: T, width: W - L - R, height: H - T - B }))));
+
+  if (m.range) {  // полоса нормы
+    const up = pts.map(p => [x(p.t), y(m.range(p.r)[1])]), dn = pts.map(p => [x(p.t), y(m.range(p.r)[0])]).reverse();
+    up.unshift([L, up[0][1]]); up.push([W - R, up.at(-1)[1]]); dn.unshift([W - R, dn[0][1]]); dn.push([L, dn.at(-1)[1]]);
+    svg.append(s('polygon', { points: [...up, ...dn].map(p => p.join(',')).join(' '), fill: 'var(--ok)', 'fill-opacity': .1, 'clip-path': `url(#${clip})` }));
+  }
+  for (let i = 0, n = Math.round((hi - lo) / step); i <= n; i++) {
+    const v = r2(lo + i * step);
+    svg.append(s('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--line)' }),
+      s('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }, fmt(v)));
+  }
+  // подписи месяцев (первый месяц и январь — с годом)
+  const d = new Date(t0); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1);
+  const months = [];
+  for (; +d <= t1; d.setUTCMonth(d.getUTCMonth() + 1)) months.push(+d);
+  const every = Math.ceil(months.length / Math.max(2, Math.floor((W - L - R) / 60)));
+  months.filter((_, i) => i % every === 0).forEach((t, i) => {
+    const dt = new Date(t), yr = i === 0 || dt.getUTCMonth() === 0 ? ` ${String(dt.getUTCFullYear()).slice(2)}` : '';
+    svg.append(s('line', { x1: x(t), x2: x(t), y1: H - B, y2: H - B + 4, stroke: 'var(--rule)' }),
+      s('text', { x: x(t), y: H - 6, 'text-anchor': 'middle' }, MON[dt.getUTCMonth()] + yr));
+  });
+  svg.append(s('line', { x1: L, x2: W - R, y1: H - B, y2: H - B, stroke: 'var(--rule)' }),
+    s('path', { d: pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t)},${y(p.v)}`).join(''), fill: 'none', stroke: 'var(--series)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  const sel = recs[idx].date;
+  pts.forEach(p => svg.append(s('circle', { cx: x(p.t), cy: y(p.v), r: p.r.date === sel ? 6 : 4, fill: p.r.date === sel ? 'var(--ink)' : 'var(--series)', stroke: '#fff', 'stroke-width': 2 })));
+  const last = pts.at(-1);
+  svg.append(s('text', { class: 'end', x: x(last.t) + 10, y: y(last.v) + 4 }, withUnit(last.v, m.unit)));
+
+  // наведение: перекрестие по ближайшей дате + подсказка; клик выбирает замер
+  const vline = s('line', { y1: T, y2: H - B, stroke: 'var(--rule)', visibility: 'hidden' });
+  const ring = s('circle', { r: 6, fill: 'var(--series)', stroke: '#fff', 'stroke-width': 2, visibility: 'hidden' });
+  const tip = h('div', { class: 'tip', hidden: true });
+  const hit = s('rect', { x: L, y: T, width: W - L - R, height: H - T - B, fill: 'transparent', style: 'cursor:pointer' });
+  svg.append(vline, ring, hit);
+  let cur = -1;
+  const show = i => {
+    cur = i; const p = pts[i], px = x(p.t), py = y(p.v);
+    for (const [k, v] of [['x1', px], ['x2', px]]) vline.setAttribute(k, v);
+    ring.setAttribute('cx', px); ring.setAttribute('cy', py);
+    vline.setAttribute('visibility', 'visible'); ring.setAttribute('visibility', 'visible');
+    const prev = pts[i - 1];
+    tip.replaceChildren(...[h('b', {}, withUnit(p.v, m.unit)), h('div', {}, dmy(p.r.date), prev ? ` · ${signed(p.v - prev.v)} к прошлому` : ''),
+      m.status && h('div', { class: `st ${cls(m.status(p.r))}` }, m.status(p.r)), m.pct && h('div', { class: 'muted' }, `${fmt(m.pct(p.r))} % от нормы`)].filter(Boolean));
+    tip.hidden = false;
+    tip.style.left = `${px + 170 > W ? px - tip.offsetWidth - 12 : px + 12}px`;
+    tip.style.top = `${Math.max(0, py - tip.offsetHeight - 8)}px`;
+  };
+  const hide = () => { cur = -1; tip.hidden = true; vline.setAttribute('visibility', 'hidden'); ring.setAttribute('visibility', 'hidden'); };
+  const nearest = e => {
+    const mx = (e.clientX - svg.getBoundingClientRect().left) * W / svg.clientWidth;
+    return pts.reduce((b, p, i) => Math.abs(x(p.t) - mx) < Math.abs(x(pts[b].t) - mx) ? i : b, 0);
+  };
+  hit.addEventListener('pointermove', e => show(nearest(e)));
+  hit.addEventListener('pointerleave', hide);
+  hit.addEventListener('click', e => setIdx(recs.indexOf(pts[nearest(e)].r)));
+  svg.addEventListener('focus', () => show(pts.length - 1));
+  svg.addEventListener('blur', hide);
+  svg.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); show(Math.max(0, Math.min(pts.length - 1, cur + (e.key === 'ArrowLeft' ? -1 : 1)))); }
+    if (e.key === 'Enter' && cur >= 0) setIdx(recs.indexOf(pts[cur].r));
+  });
+  box.replaceChildren(svg, tip);
+}
+
+function setIdx(i) {
+  idx = i;
+  history.replaceState(null, '', `#${recs[i].date}`);
+  render();
+  if (openKey) openChart(openKey);
+}
+
+let raf = 0;
+addEventListener('resize', () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { render(); if (openKey) openChart(openKey); }); });
+
+fetch('/api/data').then(r => r.json()).then(d => {
+  recs = d.records; errors = d.errors;
+  const fromHash = recs.findIndex(r => r.date === location.hash.slice(1));
+  idx = fromHash >= 0 ? fromHash : recs.length - 1;
+  render();
+}).catch(e => app.replaceChildren(h('p', { class: 'error' }, `Не удалось загрузить данные: ${e}`)));
+</script>
+</body>
+</html>
