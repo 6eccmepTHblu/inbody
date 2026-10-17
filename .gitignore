@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+.claude/settings.local.json
+
+# Личные данные: репозиторий публичный
+результаты/
+json/
