@@ -38,7 +38,20 @@ def records():
             data.append(parse_cached(p, p.stat().st_mtime))
         except Exception as e:
             errors.append(f"{p.name}: {e}")
-    return {"records": sorted(data, key=lambda d: d["date"]), "errors": errors, "settings": load_settings()}
+    # Замеры без PDF (перенесены с фото бумажных отчётов) — готовые записи в том же формате
+    for p in sorted((PDFS / "manual").glob("*.json")):
+        try:
+            data.append(json.loads(p.read_text(encoding="utf-8")))
+        except ValueError as e:
+            errors.append(f"manual/{p.name}: {e}")
+    seen, unique = set(), []
+    for d in data:  # PDF идут первыми и выигрывают у ручной записи за ту же дату
+        if d["date"] in seen:
+            errors.append(f"{d['file']}: замер за {d['date']} уже есть, пропущен")
+        else:
+            seen.add(d["date"])
+            unique.append(d)
+    return {"records": sorted(unique, key=lambda d: d["date"]), "errors": errors, "settings": load_settings()}
 
 
 def load_settings():
@@ -150,7 +163,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": f"Не похоже на отчёт InBody ({e})"}, 400)
         # Имя только из даты замера: имени файла от клиента не доверяем
         dest = PDFS / f"{date[2:].replace('-', '')}_inbody_result.pdf"
-        if dest.exists():
+        if dest.exists() or date in {r["date"] for r in records()["records"]}:
             return self.send_json({"error": f"Замер за {date} уже загружен", "date": date}, 409)
         PDFS.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)

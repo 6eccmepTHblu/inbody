@@ -217,7 +217,7 @@ const BETTER = { muscle: 1, lean_mass: 1, protein: 1, water: 1, bones: 1, fat: -
 const tone = (d, better) => d * better > 0 ? 'good' : d * better < 0 ? 'bad' : '';
 
 // --- старт сравнения: выбирается вручную (например, после перерыва), хранится на сервере ---
-const GAP_DAYS = 30;  // промежуток больше — перерыв
+const GAP_DAYS = 45;  // промежуток больше — перерыв (ежемесячные замеры по 31–33 дня перерывом не считаются)
 const baseIdx = () => {
   const i = settings.start ? recs.findIndex(r => r.date >= settings.start) : 0;
   return i < 0 ? 0 : i;

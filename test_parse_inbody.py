@@ -66,6 +66,14 @@ def test_api():
             assert app.records()["settings"] == {"start": "2026-09-16"}
             assert post(b'{"start": null}', "/api/settings") == (200, {})
             assert app.records()["settings"] == {}
+            # ручные записи (с фото): подхватываются, дубль даты пропускается, загрузка PDF за ту же дату — 409
+            (app.PDFS / "manual").mkdir()
+            rec = parse(DIR / "260409_inbody_result.pdf")
+            (app.PDFS / "manual" / "a.json").write_text(json.dumps({**rec, "file": "a.jpg"}), encoding="utf-8")
+            (app.PDFS / "manual" / "b.json").write_text(json.dumps({**rec, "file": "b.jpg", "date": "2026-10-16"}), encoding="utf-8")
+            d = app.records()
+            assert [r["date"] for r in d["records"]] == ["2026-04-09", "2026-10-16"] and "b.jpg" in d["errors"][0]
+            assert post((DIR / "260409_inbody_result.pdf").read_bytes())[0] == 409
         finally:
             srv.shutdown()
             srv.server_close()
