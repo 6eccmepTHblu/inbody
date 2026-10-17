@@ -8,6 +8,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -47,16 +48,16 @@ def path_d(items):
     for op, *pts in items:
         if op == "re":
             r = pts[0]
-            out.append(f"M{r.x0:.2f} {r.y0:.2f}H{r.x1:.2f}V{r.y1:.2f}H{r.x0:.2f}Z")
+            out.append(f"M{r.x0:.1f} {r.y0:.1f}H{r.x1:.1f}V{r.y1:.1f}H{r.x0:.1f}Z")  # 0.1 pt ≈ 0.2 px на экране
             cur = None
         elif op == "qu":
             q = pts[0]
-            out.append("M" + "L".join(f"{p.x:.2f} {p.y:.2f}" for p in (q.ul, q.ur, q.lr, q.ll)) + "Z")
+            out.append("M" + "L".join(f"{p.x:.1f} {p.y:.1f}" for p in (q.ul, q.ur, q.lr, q.ll)) + "Z")
             cur = None
         else:  # 'l' / 'c': первая точка — начало сегмента
             if cur != pts[0]:
-                out.append(f"M{pts[0].x:.2f} {pts[0].y:.2f}")
-            out.append(("L" if op == "l" else "C") + " ".join(f"{p.x:.2f} {p.y:.2f}" for p in pts[1:]))
+                out.append(f"M{pts[0].x:.1f} {pts[0].y:.1f}")
+            out.append(("L" if op == "l" else "C") + " ".join(f"{p.x:.1f} {p.y:.1f}" for p in pts[1:]))
             cur = pts[-1]
     return "".join(out)
 
@@ -113,7 +114,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(records())
         elif self.path in ("/figure/muscle.svg", "/figure/fat.svg"):
             svg = figure(self.path.removeprefix("/figure/").removesuffix(".svg"))
-            self.send(svg, "image/svg+xml") if svg else self.send_error(404, "нет PDF нового макета")
+            self.send(svg, "image/svg+xml", cache="private, max-age=86400") if svg else self.send_error(404, "нет PDF нового макета")
         else:
             super().do_GET()
 
@@ -146,11 +147,13 @@ class Handler(SimpleHTTPRequestHandler):
     def send_json(self, obj, code=200):
         self.send(json.dumps(obj, ensure_ascii=False), "application/json", code)
 
-    def send(self, text, ctype, code=200):
+    def send(self, text, ctype, code=200, cache=None):
         body = text.encode()
         self.send_response(code)
         self.send_header("Content-Type", f"{ctype}; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if cache:
+            self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(body)
 
@@ -159,4 +162,6 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 8000))
     sys.stdout.reconfigure(encoding="utf-8")
     print(f"http://{HOST}:{port}  PDF: {PDFS}", flush=True)
+    # Прогрев кэша: иначе первый запрос после старта ждёт разбора всех PDF (~2 с)
+    threading.Thread(target=lambda: (records(), figure("muscle")), daemon=True).start()
     ThreadingHTTPServer((HOST, port), Handler).serve_forever()

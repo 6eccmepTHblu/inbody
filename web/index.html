@@ -6,7 +6,11 @@
 <title>InBody — динамика</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700;800&display=swap" rel="stylesheet">
+<!-- Шрифт не блокирует первую отрисовку; данные и фигуры качаются параллельно с разбором страницы -->
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<link rel="preload" href="/api/data" as="fetch" crossorigin="anonymous">
+<link rel="preload" href="/figure/muscle.svg" as="image">
+<link rel="preload" href="/figure/fat.svg" as="image">
 <style>
   :root {
     --ink: #003e47; --muted: #6a7a7c; --line: #e4eeee; --rule: #a6b6b8; --hover: #b9d3d3;
@@ -332,7 +336,7 @@ function niceStep(span, n = 4) {
 
 function drawChart(box, m, recsWithValue) {
   const pts = recsWithValue.map(r => ({ r, t: Date.parse(r.date), v: m.value(r) }));
-  const W = box.clientWidth, H = 300, L = 40, R = 70, T = 12, B = 26, DAY = 864e5;
+  const W = Math.max(box.clientWidth, 280), H = 300, L = 40, R = 70, T = 12, B = 26, DAY = 864e5;
   let t0 = pts[0].t, t1 = pts.at(-1).t;
   if (t0 === t1) { t0 -= 7 * DAY; t1 += 7 * DAY; }
   let lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
