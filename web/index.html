@@ -113,8 +113,15 @@
   .dhead p { margin: 4px 0 0; color: var(--muted); }
   .x { all: unset; cursor: pointer; font-size: 26px; line-height: 1; padding: 0 6px; color: var(--muted); }
   .x:hover, .x:focus-visible { color: var(--ink); }
-  .chart { position: relative; margin: 14px 0 8px; }
-  .chart svg { display: block; width: 100%; height: 300px; overflow: visible; outline: none; }
+  .chart { position: relative; margin: 10px 0 6px; }
+  .chart svg { display: block; width: 100%; height: 300px; overflow: visible; outline: none; cursor: crosshair;
+               touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  .chart svg:focus-visible { outline: 2px solid var(--hover); outline-offset: 4px; border-radius: 4px; }
+  .ctools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .ctools button { all: unset; cursor: pointer; font-size: 12px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .ctools button:hover, .ctools button:focus-visible { border-color: var(--hover); color: var(--ink); }
+  .ctools button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .hint { margin: 0 0 10px; font-size: 11px; color: var(--muted); }
   .chart text { font: 500 11px "Onest", system-ui, sans-serif; fill: var(--muted); font-variant-numeric: tabular-nums; }
   .chart text.end { fill: var(--ink); font-weight: 700; font-size: 12px; }
   .tip { position: absolute; pointer-events: none; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 12px; white-space: nowrap; box-shadow: 0 4px 16px rgba(0, 40, 50, .12); }
@@ -310,12 +317,18 @@ function sparkline(svg, vals) {
 }
 
 // --- окно с графиком ---
+const DAY = 864e5;
+const COARSE = matchMedia('(pointer: coarse)').matches;
+// Масштаб и активная точка переживают перерисовку (выбор замера, поворот экрана); сброс — при смене метрики
+let view = null;
+
 function openChart(key) {
   openKey = key;
+  if (view?.key !== key) view = { key, v0: null, v1: null, active: null, touchY: null, lastTap: 0 };
   const m = metric(key), pts = recs.filter(r => m.value(r) != null);
   const range = m.range && m.range(recs.at(-1));
   const firstV = m.value(pts[0]), lastV = m.value(pts.at(-1));
-  const box = h('div', { class: 'chart' });
+  const box = h('div', { class: 'chart' }), tools = h('div', { class: 'ctools', role: 'group', 'aria-label': 'Период' });
   dlg.replaceChildren(
     h('div', { class: 'dhead' },
       h('div', {}, h('h2', {}, m.title),
@@ -323,98 +336,263 @@ function openChart(key) {
           h('b', {}, `${withUnit(firstV, m.unit)} → ${withUnit(lastV, m.unit)} (${signed(lastV - firstV)})`),
           range ? `. Зелёная полоса — норма ${range[0]}–${range[1]}` : '')),
       h('button', { class: 'x', type: 'button', 'aria-label': 'Закрыть', onclick: () => dlg.close() }, '×')),
-    box,
+    tools, box,
+    h('p', { class: 'hint' }, COARSE
+      ? 'Ведите пальцем — значения; щипок — масштаб, два пальца — сдвиг; двойной тап — весь период.'
+      : 'Колесо — масштаб, перетаскивание — сдвиг, клик — выбрать замер, двойной клик — весь период. С клавиатуры: ← → + − 0.'),
     h('details', {}, h('summary', {}, 'Таблица'),
       h('table', {}, h('tr', {}, h('th', {}, 'Дата'), h('th', {}, 'Значение'), m.range ? h('th', {}, 'Норма') : null, m.status ? h('th', {}, 'Статус') : null, m.pct ? h('th', {}, '% от нормы') : null),
         [...pts].reverse().map(r => h('tr', {}, h('td', {}, dmy(r.date)), h('td', {}, withUnit(m.value(r), m.unit)),
           m.range ? h('td', {}, m.range(r).join('–')) : null, m.status ? h('td', {}, m.status(r)) : null, m.pct ? h('td', {}, fmt(m.pct(r))) : null)))));
   if (!dlg.open) dlg.showModal();
-  drawChart(box, m, pts);
+  drawChart(box, tools, m, pts);
 }
 dlg.addEventListener('click', e => { if (e.target === dlg) dlg.close(); });
-dlg.addEventListener('close', () => { openKey = null; });
+dlg.addEventListener('close', () => { openKey = null; view = null; });
 
 function niceStep(span, n = 4) {
   const raw = span / n, p = 10 ** Math.floor(Math.log10(raw));
   return [1, 2, 2.5, 5, 10].map(k => k * p).find(st => st >= raw);
 }
 
-function drawChart(box, m, recsWithValue) {
+// Подписи оси времени: дни при крупном масштабе, месяцы (с годом у первого и у января) — при мелком
+function timeTicks(v0, v1, maxN) {
+  const span = (v1 - v0) / DAY, out = [];
+  const dstep = [1, 2, 7, 14].find(d => span / d <= maxN);
+  if (dstep) {
+    for (let t = Math.ceil(v0 / DAY / dstep) * dstep * DAY; t <= v1; t += dstep * DAY) {
+      const d = new Date(t);
+      out.push([t, `${d.getUTCDate()} ${MON[d.getUTCMonth()]}`]);
+    }
+    return out;
+  }
+  const mstep = [1, 2, 3, 6].find(k => span / (30.44 * k) <= maxN) || 12;
+  const d = new Date(v0);
+  d.setUTCHours(0, 0, 0, 0); d.setUTCDate(1);
+  if (+d < v0) d.setUTCMonth(d.getUTCMonth() + 1);
+  for (; +d <= v1; d.setUTCMonth(d.getUTCMonth() + 1)) {
+    if (d.getUTCMonth() % mstep) continue;
+    const yr = !out.length || d.getUTCMonth() === 0 ? ` ${String(d.getUTCFullYear()).slice(2)}` : '';
+    out.push([+d, MON[d.getUTCMonth()] + yr]);
+  }
+  return out;
+}
+
+function drawChart(box, tools, m, recsWithValue) {
   const pts = recsWithValue.map(r => ({ r, t: Date.parse(r.date), v: m.value(r) }));
-  const W = Math.max(box.clientWidth, 280), H = 300, L = 40, R = 70, T = 12, B = 26, DAY = 864e5;
-  let t0 = pts[0].t, t1 = pts.at(-1).t;
-  if (t0 === t1) { t0 -= 7 * DAY; t1 += 7 * DAY; }
-  let lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
-  const pad = Math.max((hi - lo) * .15, Math.abs(hi) * .01, .1);
-  const step = niceStep(hi - lo + 2 * pad);
-  lo = Math.floor((lo - pad) / step) * step; hi = Math.ceil((hi + pad) / step) * step;
-  const x = t => L + (t - t0) / (t1 - t0) * (W - L - R), y = v => T + (hi - v) / (hi - lo) * (H - T - B);
+  const W = Math.max(box.clientWidth, 280), H = 300, L = 40, R = 64, T = 12, B = 26, PW = W - L - R, PH = H - T - B;
+  // Весь период с полями, чтобы крайние точки не липли к осям; глубже 5 дней не увеличиваем
+  let f0 = pts[0].t, f1 = pts.at(-1).t;
+  if (f1 - f0 < 14 * DAY) { const c = (f0 + f1) / 2; f0 = c - 7 * DAY; f1 = c + 7 * DAY; }
+  const edge = (f1 - f0) * .03; f0 -= edge; f1 += edge;
+  const clampView = (a, b) => {
+    const span = Math.min(Math.max(b - a, 5 * DAY), f1 - f0);
+    a = Math.min(Math.max(a, f0), f1 - span);
+    return [a, a + span];
+  };
+  [view.v0, view.v1] = clampView(view.v0 ?? f0, view.v1 ?? f1);
 
   const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, tabindex: 0, role: 'img', 'aria-label': `${m.title}: график по датам` });
-  const clip = 'plot-clip';
-  svg.append(s('defs', {}, s('clipPath', { id: clip }, s('rect', { x: L, y: T, width: W - L - R, height: H - T - B }))));
-
-  if (m.range) {  // полоса нормы
-    const up = pts.map(p => [x(p.t), y(m.range(p.r)[1])]), dn = pts.map(p => [x(p.t), y(m.range(p.r)[0])]).reverse();
-    up.unshift([L, up[0][1]]); up.push([W - R, up.at(-1)[1]]); dn.unshift([W - R, dn[0][1]]); dn.push([L, dn.at(-1)[1]]);
-    svg.append(s('polygon', { points: [...up, ...dn].map(p => p.join(',')).join(' '), fill: 'var(--ok)', 'fill-opacity': .1, 'clip-path': `url(#${clip})` }));
-  }
-  for (let i = 0, n = Math.round((hi - lo) / step); i <= n; i++) {
-    const v = r2(lo + i * step);
-    svg.append(s('line', { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: 'var(--line)' }),
-      s('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }, fmt(v)));
-  }
-  // подписи месяцев (первый месяц и январь — с годом)
-  const d = new Date(t0); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1);
-  const months = [];
-  for (; +d <= t1; d.setUTCMonth(d.getUTCMonth() + 1)) months.push(+d);
-  const every = Math.ceil(months.length / Math.max(2, Math.floor((W - L - R) / 60)));
-  months.filter((_, i) => i % every === 0).forEach((t, i) => {
-    const dt = new Date(t), yr = i === 0 || dt.getUTCMonth() === 0 ? ` ${String(dt.getUTCFullYear()).slice(2)}` : '';
-    svg.append(s('line', { x1: x(t), x2: x(t), y1: H - B, y2: H - B + 4, stroke: 'var(--rule)' }),
-      s('text', { x: x(t), y: H - 6, 'text-anchor': 'middle' }, MON[dt.getUTCMonth()] + yr));
-  });
-  svg.append(s('line', { x1: L, x2: W - R, y1: H - B, y2: H - B, stroke: 'var(--rule)' }),
-    s('path', { d: pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t)},${y(p.v)}`).join(''), fill: 'none', stroke: 'var(--series)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
-  const sel = recs[idx].date;
-  pts.forEach(p => svg.append(s('circle', { cx: x(p.t), cy: y(p.v), r: p.r.date === sel ? 6 : 4, fill: p.r.date === sel ? 'var(--ink)' : 'var(--series)', stroke: '#fff', 'stroke-width': 2 })));
-  const last = pts.at(-1);
-  svg.append(s('text', { class: 'end', x: x(last.t) + 10, y: y(last.v) + 4 }, withUnit(last.v, m.unit)));
-
-  // наведение: перекрестие по ближайшей дате + подсказка; клик выбирает замер
-  const vline = s('line', { y1: T, y2: H - B, stroke: 'var(--rule)', visibility: 'hidden' });
-  const ring = s('circle', { r: 6, fill: 'var(--series)', stroke: '#fff', 'stroke-width': 2, visibility: 'hidden' });
+  const layer = s('g');
+  const vline = s('line', { y1: T, y2: T + PH, stroke: 'var(--rule)', visibility: 'hidden' });
+  const ring = s('circle', { r: 7, fill: 'var(--series)', stroke: '#fff', 'stroke-width': 2, visibility: 'hidden' });
   const tip = h('div', { class: 'tip', hidden: true });
-  const hit = s('rect', { x: L, y: T, width: W - L - R, height: H - T - B, fill: 'transparent', style: 'cursor:pointer' });
-  svg.append(vline, ring, hit);
-  let cur = -1;
-  const show = i => {
-    cur = i; const p = pts[i], px = x(p.t), py = y(p.v);
-    for (const [k, v] of [['x1', px], ['x2', px]]) vline.setAttribute(k, v);
+  svg.append(s('defs', {}, s('clipPath', { id: 'plot-clip' }, s('rect', { x: L, y: T, width: PW, height: PH }))), layer, vline, ring);
+  box.replaceChildren(svg, tip);
+
+  const PRESETS = [['Месяц', 30], ['3 мес', 91], ['Полгода', 182], ['Всё', 0]];
+  const presetBtns = PRESETS.map(([label, days]) =>
+    h('button', { type: 'button', onclick: () => days ? setView(f1 - days * DAY, f1) : setView(f0, f1) }, label));
+  tools.replaceChildren(...presetBtns);
+
+  let x = null, y = null, frame = 0;
+  function paint() {
+    const { v0, v1 } = view, span = v1 - v0, full = span >= f1 - f0 - 1;
+    x = t => L + (t - v0) / span * PW;
+    // Шкала Y — по точкам в окне (если в окне пусто — по ближайшим соседям)
+    let vis = pts.filter(p => p.t >= v0 && p.t <= v1);
+    if (!vis.length) vis = [pts.findLast(p => p.t < v0), pts.find(p => p.t > v1)].filter(Boolean);
+    let lo = Math.min(...vis.map(p => p.v)), hi = Math.max(...vis.map(p => p.v));
+    const pad = Math.max((hi - lo) * .15, Math.abs(hi) * .01, .1), step = niceStep(hi - lo + 2 * pad);
+    lo = Math.floor((lo - pad) / step) * step; hi = Math.ceil((hi + pad) / step) * step;
+    y = v => T + (hi - v) / (hi - lo) * PH;
+
+    const clip = { 'clip-path': 'url(#plot-clip)' }, kids = [];
+    if (m.range) {  // полоса нормы
+      const up = pts.map(p => [x(p.t), y(m.range(p.r)[1])]), dn = pts.map(p => [x(p.t), y(m.range(p.r)[0])]);
+      up.unshift([Math.min(L, up[0][0]), up[0][1]]); up.push([Math.max(L + PW, up.at(-1)[0]), up.at(-1)[1]]);
+      dn.unshift([Math.min(L, dn[0][0]), dn[0][1]]); dn.push([Math.max(L + PW, dn.at(-1)[0]), dn.at(-1)[1]]);
+      kids.push(s('polygon', { ...clip, points: [...up, ...dn.reverse()].map(p => p.join(',')).join(' '), fill: 'var(--ok)', 'fill-opacity': .1 }));
+    }
+    for (let i = 0, n = Math.round((hi - lo) / step); i <= n; i++) {
+      const v = r2(lo + i * step);
+      kids.push(s('line', { x1: L, x2: L + PW, y1: y(v), y2: y(v), stroke: 'var(--line)' }),
+        s('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }, fmt(v)));
+    }
+    for (const [t, label] of timeTicks(v0, v1, Math.max(2, Math.floor(PW / 64)))) {
+      if (x(t) < L + 10 || x(t) > L + PW - 10) continue;
+      kids.push(s('line', { x1: x(t), x2: x(t), y1: T + PH, y2: T + PH + 4, stroke: 'var(--rule)' }),
+        s('text', { x: x(t), y: H - 6, 'text-anchor': 'middle' }, label));
+    }
+    const sel = recs[idx].date, last = pts.at(-1);
+    kids.push(s('line', { x1: L, x2: L + PW, y1: T + PH, y2: T + PH, stroke: 'var(--rule)' }),
+      s('path', { ...clip, d: pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t)},${y(p.v)}`).join(''), fill: 'none', stroke: 'var(--series)', 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }),
+      ...pts.map(p => s('circle', { ...clip, cx: x(p.t), cy: y(p.v), r: p.r.date === sel ? 6 : 4, fill: p.r.date === sel ? 'var(--ink)' : 'var(--series)', stroke: '#fff', 'stroke-width': 2 })));
+    if (last.t <= v1) kids.push(s('text', { class: 'end', x: x(last.t) + 10, y: y(last.v) + 4 }, withUnit(last.v, m.unit)));
+    layer.replaceChildren(...kids);
+
+    presetBtns.forEach((b, i) => {
+      const days = PRESETS[i][1];
+      b.setAttribute('aria-pressed', days ? !full && Math.abs(v1 - f1) < DAY && Math.abs(span - days * DAY) < DAY : full);
+    });
+    const ai = pts.findIndex(p => p.r.date === view.active);
+    ai >= 0 ? show(ai) : hide();
+  }
+  const setView = (a, b) => {
+    [view.v0, view.v1] = clampView(a, b);
+    cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(paint);
+  };
+
+  // Перекрестие + подсказка. При касании подсказка уходит в другую половину графика, чтобы её не закрывал палец
+  function show(i) {
+    const p = pts[i], px = x(p.t), py = y(p.v);
+    if (px < L - 1 || px > L + PW + 1) return hide();
+    vline.setAttribute('x1', px); vline.setAttribute('x2', px);
     ring.setAttribute('cx', px); ring.setAttribute('cy', py);
     vline.setAttribute('visibility', 'visible'); ring.setAttribute('visibility', 'visible');
     const prev = pts[i - 1];
     tip.replaceChildren(...[h('b', {}, withUnit(p.v, m.unit)), h('div', {}, dmy(p.r.date), prev ? ` · ${signed(p.v - prev.v)} к прошлому` : ''),
       m.status && h('div', { class: `st ${cls(m.status(p.r))}` }, m.status(p.r)), m.pct && h('div', { class: 'muted' }, `${fmt(m.pct(p.r))} % от нормы`)].filter(Boolean));
     tip.hidden = false;
-    tip.style.left = `${px + 170 > W ? px - tip.offsetWidth - 12 : px + 12}px`;
-    tip.style.top = `${Math.max(0, py - tip.offsetHeight - 8)}px`;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    if (view.touchY == null) {
+      tip.style.left = `${px + 12 + tw > W ? px - tw - 12 : px + 12}px`;
+      tip.style.top = `${Math.max(0, py - th - 8)}px`;
+    } else {
+      tip.style.left = `${Math.min(Math.max(px - tw / 2, 0), W - tw)}px`;
+      tip.style.top = `${view.touchY > T + PH / 2 ? T : T + PH - th}px`;
+    }
+  }
+  function hide() {
+    tip.hidden = true;
+    vline.setAttribute('visibility', 'hidden'); ring.setAttribute('visibility', 'hidden');
+  }
+
+  // --- жесты (Pointer Events: мышь, палец, перо одним кодом) ---
+  const rect = () => svg.getBoundingClientRect();
+  const sx = e => (e.clientX - rect().left) * W / rect().width;
+  const sy = e => (e.clientY - rect().top) * H / rect().height;
+  const tAt = px => view.v0 + (px - L) / PW * (view.v1 - view.v0);
+  const nearest = px => {  // ближайшая по горизонтали точка из видимых
+    let best = -1;
+    pts.forEach((p, i) => {
+      if (p.t < view.v0 || p.t > view.v1) return;
+      if (best < 0 || Math.abs(x(p.t) - px) < Math.abs(x(pts[best].t) - px)) best = i;
+    });
+    return best;
   };
-  const hide = () => { cur = -1; tip.hidden = true; vline.setAttribute('visibility', 'hidden'); ring.setAttribute('visibility', 'hidden'); };
-  const nearest = e => {
-    const mx = (e.clientX - svg.getBoundingClientRect().left) * W / svg.clientWidth;
-    return pts.reduce((b, p, i) => Math.abs(x(p.t) - mx) < Math.abs(x(pts[b].t) - mx) ? i : b, 0);
+  const point = (e, touch) => {
+    const i = nearest(sx(e));
+    if (i < 0) return;
+    view.active = pts[i].r.date;
+    view.touchY = touch ? sy(e) : null;
+    show(i);
   };
-  hit.addEventListener('pointermove', e => show(nearest(e)));
-  hit.addEventListener('pointerleave', hide);
-  hit.addEventListener('click', e => setIdx(recs.indexOf(pts[nearest(e)].r)));
-  svg.addEventListener('focus', () => show(pts.length - 1));
-  svg.addEventListener('blur', hide);
-  svg.addEventListener('keydown', e => {
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); show(Math.max(0, Math.min(pts.length - 1, cur + (e.key === 'ArrowLeft' ? -1 : 1)))); }
-    if (e.key === 'Enter' && cur >= 0) setIdx(recs.indexOf(pts[cur].r));
+  const select = i => {
+    if (i < 0) return;
+    view.active = pts[i].r.date;
+    const ri = recs.indexOf(pts[i].r);
+    ri === idx ? show(i) : setIdx(ri);
+  };
+
+  const ptrs = new Map();
+  let g = null;  // текущий жест: scrub | pan | pinch | done
+  svg.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    try { svg.setPointerCapture(e.pointerId); } catch { /* указатель уже неактивен */ }
+    ptrs.set(e.pointerId, e);
+    if (ptrs.size === 2) {  // щипок: даты под пальцами остаются под пальцами
+      const [a, b] = [...ptrs.values()].map(sx);
+      g = { type: 'pinch', ta: tAt(a), tb: tAt(b) };
+      view.active = null; hide();
+    } else if (ptrs.size > 2) {
+      g = { type: 'done' };
+    } else if (e.pointerType === 'mouse') {
+      g = { type: 'pan', x0: sx(e), v0: view.v0, v1: view.v1, moved: false };
+    } else {
+      g = { type: 'scrub', x0: sx(e), t: e.timeStamp, moved: false };
+      point(e, true);
+    }
   });
-  box.replaceChildren(svg, tip);
+  svg.addEventListener('pointermove', e => {
+    if (ptrs.has(e.pointerId)) ptrs.set(e.pointerId, e);
+    if (g?.type === 'pinch' && ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()].map(sx);
+      if (Math.abs(b - a) < 20) return;
+      const k = (g.tb - g.ta) / (b - a), v0 = g.ta - (a - L) * k;  // время на пиксель и левый край окна
+      setView(v0, v0 + PW * k);
+    } else if (g?.type === 'pan') {
+      const dx = sx(e) - g.x0;
+      if (Math.abs(dx) > 3) { g.moved = true; svg.style.cursor = 'grabbing'; hide(); }
+      if (g.moved) { const dt = dx / PW * (g.v1 - g.v0); setView(g.v0 - dt, g.v1 - dt); }
+    } else if (g?.type === 'scrub') {
+      if (Math.abs(sx(e) - g.x0) > 8) g.moved = true;
+      point(e, true);
+    } else if (!g && e.pointerType === 'mouse') {
+      point(e, false);
+    }
+  });
+  const up = e => {
+    ptrs.delete(e.pointerId);
+    if (g?.type === 'pinch' || g?.type === 'done') { g = ptrs.size ? { type: 'done' } : null; return; }
+    const done = g;
+    g = null;
+    svg.style.cursor = '';
+    if (!done || e.type === 'pointercancel') return;
+    if (done.type === 'pan' && !done.moved) select(nearest(sx(e)));
+    if (done.type === 'scrub' && !done.moved && e.timeStamp - done.t < 300) {  // тап; второй подряд — весь период
+      if (e.timeStamp - view.lastTap < 350) { view.lastTap = 0; setView(f0, f1); }
+      else { view.lastTap = e.timeStamp; select(nearest(sx(e))); }
+    }
+  };
+  svg.addEventListener('pointerup', up);
+  svg.addEventListener('pointercancel', up);
+  svg.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !g) { view.active = null; hide(); } });
+  svg.addEventListener('dblclick', () => setView(f0, f1));
+  svg.addEventListener('contextmenu', e => { if (COARSE) e.preventDefault(); });
+  svg.addEventListener('wheel', e => {
+    e.preventDefault();
+    const span = view.v1 - view.v0;
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {  // горизонтальная прокрутка тачпада — сдвиг
+      const dt = e.deltaX / PW * span;
+      return setView(view.v0 + dt, view.v1 + dt);
+    }
+    const px = sx(e), t = tAt(px), ns = span * Math.exp(e.deltaY * (e.ctrlKey ? .01 : .0015));
+    const v0 = t - (px - L) / PW * ns;  // дата под курсором остаётся на месте
+    setView(v0, v0 + ns);
+  }, { passive: false });
+  svg.addEventListener('focus', () => {
+    if (svg.matches(':focus-visible') && !view.active) { view.active = pts.at(-1).r.date; view.touchY = null; show(pts.length - 1); }
+  });
+  svg.addEventListener('keydown', e => {
+    let i = pts.findIndex(p => p.r.date === view.active);
+    const span = view.v1 - view.v0;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      i = i < 0 ? pts.length - 1 : Math.max(0, Math.min(pts.length - 1, i + (e.key === 'ArrowLeft' ? -1 : 1)));
+      view.active = pts[i].r.date; view.touchY = null;
+      const t = pts[i].t;
+      t < view.v0 || t > view.v1 ? setView(t - span / 2, t + span / 2) : show(i);
+    } else if (e.key === '+' || e.key === '=' || e.key === '-') {
+      const c = i >= 0 ? pts[i].t : (view.v0 + view.v1) / 2, ns = span * (e.key === '-' ? 1.5 : 1 / 1.5);
+      setView(c - ns / 2, c + ns / 2);
+    } else if (e.key === '0') setView(f0, f1);
+    else if (e.key === 'Enter' && i >= 0) select(i);
+    else return;
+    e.preventDefault();
+  });
+
+  paint();
 }
 
 function setIdx(i) {
