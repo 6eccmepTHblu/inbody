@@ -39,11 +39,20 @@ PDF читаются из `результаты/` на лету: новый фа
 ## Сервер
 
 Живёт в `/srv/inbody` (Docker, `127.0.0.1:8400`), снаружи — `https://inbody.2-27-10-45.sslip.io/`
-за `basic_auth` в общем Caddy. PDF лежат в `/srv/inbody/data` и переживают пересборку.
+через общий Caddy. PDF лежат в `/srv/inbody/data` и переживают пересборку.
+
+Вход — в самом приложении (на сервере `INBODY_AUTH=1`, локально выключен): страница `/login`,
+подписанная cookie на 30 дней, продлевается при каждом открытии. Пароль — bcrypt-хеш в
+`/srv/inbody/data/auth.json`; смена пароля завершает все входы:
+
+```bash
+ssh -t -i ~/.ssh/pcs_vps root@2.27.10.45 docker exec -it inbody-web-1 python app.py passwd
+```
 
 ```bash
 ./deploy.sh                                                   # с рабочей машины: git push + обновление
 ssh -i ~/.ssh/pcs_vps root@2.27.10.45 /srv/inbody/update.sh   # только обновить сервер из репозитория
 ```
 
-`update.sh`: `git pull --ff-only`, `docker compose up -d --build`, ждёт `200` от `/api/data`, иначе печатает логи и падает.
+`update.sh`: `git pull --ff-only`, `docker compose up -d --build`, ждёт `200` от манифеста и проверяет, что `/api/data`
+без входа отдаёт `401`; иначе печатает логи и падает.
