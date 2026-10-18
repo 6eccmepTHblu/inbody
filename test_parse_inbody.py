@@ -108,6 +108,7 @@ def test_auth():
             assert req("POST", "/login", "password=x")[1] == "/login?error=nopass"
             (app.PDFS / "auth.json").write_text(json.dumps({"hash": bcrypt.hashpw(b"secret", bcrypt.gensalt(4)).decode()}))
             assert req("GET", "/")[:2] == (303, "/login")
+            assert req("HEAD", "/")[:2] == (303, "/login")
             assert req("GET", "/figure/muscle.svg")[0] == 401
             assert req("POST", "/api/settings", "{}")[0] == 401
             for p in ("/login", "/manifest.webmanifest", "/icon-192.png", "/icon.svg"):

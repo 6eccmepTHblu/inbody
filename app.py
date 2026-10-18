@@ -194,6 +194,12 @@ class Handler(SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def do_HEAD(self):  # без этого HEAD шёл бы в отдачу файлов мимо проверки входа
+        self.cookie = None
+        if not self.allowed():
+            return self.redirect("/login")
+        super().do_HEAD()
+
     def do_POST(self):
         self.cookie = None
         if self.path == "/login":
