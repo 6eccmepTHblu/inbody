@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InBody — вход</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#ffffff">
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@500;700;800&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<style>
+  :root { --ink: #003e47; --muted: #6a7a7c; --line: #e4eeee; --hover: #b9d3d3; --hi-bg: #ffe3cc; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px; background: #fff; color: var(--ink); font: 500 15px/1.4 "Onest", system-ui, sans-serif; }
+  form { width: min(340px, 100%); display: grid; gap: 14px; }
+  .brand { font-weight: 800; font-size: 22px; }
+  .brand span { color: #8062b8; }
+  label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+  input { font: inherit; color: var(--ink); padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; }
+  input:focus { outline: 2px solid var(--hover); border-color: var(--hover); }
+  button { font: inherit; font-weight: 700; color: #fff; background: var(--ink); border: 0; border-radius: 12px; padding: 12px; cursor: pointer; }
+  button:hover, button:focus-visible { background: #005966; }
+  .error { margin: 0; padding: 10px 14px; border-radius: 12px; background: var(--hi-bg); }
+  .note { margin: 0; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <div class="brand">InBody <span>· динамика</span></div>
+  <p class="error" id="error" hidden></p>
+  <!-- логин один; поле нужно менеджеру паролей, чтобы запомнить пару -->
+  <input type="text" name="username" value="slava" autocomplete="username" style="display:none">
+  <label>Пароль <input type="password" name="password" autocomplete="current-password" required autofocus></label>
+  <button type="submit">Войти</button>
+  <p class="note">На этом устройстве вход запоминается на 30 дней и продлевается при каждом открытии сайта.</p>
+</form>
+<script>
+  const msg = {
+    1: 'Неверный пароль.',
+    locked: 'Слишком много попыток — подождите 10 минут.',
+    nopass: 'Пароль на сервере ещё не задан: docker exec -it inbody-web-1 python app.py passwd',
+  }[new URLSearchParams(location.search).get('error')];
+  if (msg) { const e = document.getElementById('error'); e.textContent = msg; e.hidden = false; }
+</script>
+</body>
+</html>

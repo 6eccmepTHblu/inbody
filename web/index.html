@@ -786,7 +786,9 @@ addEventListener('drop', e => {
 
 async function load(date) {
   try {
-    const d = await fetch('/api/data').then(r => r.json());
+    const res = await fetch('/api/data');
+    if (res.status === 401) return location.assign('/login');  // вход истёк, пока страница была открыта
+    const d = await res.json();
     recs = d.records; errors = d.errors; settings = d.settings || {};
   } catch (e) {
     errors = [`Не удалось загрузить данные: ${e}`];

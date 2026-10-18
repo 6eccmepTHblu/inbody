@@ -4,16 +4,24 @@ PDF из папки «результаты» (или INBODY_PDFS) разбира
 новый файл — загрузить через страницу или положить в папку и обновить страницу.
 """
 import functools
+import getpass
+import hashlib
+import hmac
 import json
 import os
 import re
 import sys
 import tempfile
-from datetime import date
 import threading
+import time
+from collections import deque
+from datetime import date
+from http.cookies import CookieError, SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
+import bcrypt
 import pymupdf
 
 from parse_inbody import parse
@@ -22,6 +30,14 @@ ROOT = Path(__file__).parent
 PDFS = Path(os.environ.get("INBODY_PDFS") or ROOT / "результаты")
 HOST = os.environ.get("INBODY_HOST", "127.0.0.1")
 MAX_UPLOAD = 20 * 1024 * 1024
+
+# Вход: пароль (bcrypt-хеш в auth.json рядом с PDF) -> cookie на SESSION_DAYS, продлевается при каждом открытии.
+# Включается на сервере (INBODY_AUTH=1); без auth.json сайт закрыт целиком.
+AUTH = os.environ.get("INBODY_AUTH") == "1"
+SESSION_DAYS = 30
+COOKIE = "inbody_session"
+PUBLIC = {"/login", "/login.html", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon.svg"}
+FAILS = deque()  # время неудачных входов: 10 за 10 минут — пауза для всех попыток
 PANEL = "#f0f7f7"  # фон квадрантов с фигурой в новом макете
 STATUS_FILLS = {"#12b76a", "#ff7d20", "#12d8d8"}  # плашки процентов: их рисует страница под выбранный замер
 
@@ -60,6 +76,35 @@ def load_settings():
         return json.loads((PDFS / "settings.json").read_text(encoding="utf-8"))
     except (FileNotFoundError, ValueError):
         return {}
+
+
+def load_hash():
+    try:
+        return json.loads((PDFS / "auth.json").read_text(encoding="utf-8"))["hash"].encode()
+    except (FileNotFoundError, ValueError, KeyError):
+        return None
+
+
+def make_token(pw_hash, expires):
+    """Подпись срока действия ключом из хеша пароля: смена пароля сразу завершает все входы."""
+    key = hashlib.sha256(b"inbody-session:" + pw_hash).digest()
+    return f"{expires}.{hmac.new(key, str(expires).encode(), 'sha256').hexdigest()}"
+
+
+def token_ok(token, pw_hash):
+    expires = token.partition(".")[0]
+    return (expires.isdigit() and int(expires) > time.time()
+            and hmac.compare_digest(token.encode(), make_token(pw_hash, int(expires)).encode()))
+
+
+def set_password():
+    pw = getpass.getpass("Новый пароль: ")
+    if not pw or pw != getpass.getpass("Ещё раз: "):
+        sys.exit("Пароль пустой или не совпал")
+    PDFS.mkdir(parents=True, exist_ok=True)
+    pw_hash = bcrypt.hashpw(pw.encode(), bcrypt.gensalt(12)).decode()
+    (PDFS / "auth.json").write_text(json.dumps({"hash": pw_hash}), encoding="utf-8")
+    print("Пароль сохранён, все прежние входы завершены.")
 
 
 def hexc(c):
@@ -133,6 +178,14 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT / "web"), **kwargs)
 
     def do_GET(self):
+        self.cookie = None
+        if not self.allowed():
+            return self.deny()
+        path = urlsplit(self.path).path
+        if path == "/login":
+            self.path = "/login.html"
+        elif path == "/" and AUTH:
+            self.cookie = self.session_cookie()  # каждое открытие сайта продлевает вход
         if self.path == "/api/data":
             self.send_json(records())
         elif self.path in ("/figure/muscle.svg", "/figure/fat.svg"):
@@ -142,6 +195,11 @@ class Handler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
+        self.cookie = None
+        if self.path == "/login":
+            return self.login()
+        if not self.allowed():
+            return self.deny()
         if self.path == "/api/settings":
             return self.save_settings()
         if self.path != "/api/upload":
@@ -186,6 +244,60 @@ class Handler(SimpleHTTPRequestHandler):
         tmp.replace(PDFS / "settings.json")
         self.send_json(settings)
 
+    # --- вход ---
+    def allowed(self):
+        if not AUTH or urlsplit(self.path).path in PUBLIC:
+            return True
+        pw_hash = load_hash()
+        try:
+            c = SimpleCookie(self.headers.get("Cookie", "")).get(COOKIE)
+        except CookieError:
+            return False
+        return bool(pw_hash and c and token_ok(c.value, pw_hash))
+
+    def deny(self):
+        if urlsplit(self.path).path.startswith(("/api/", "/figure/")):
+            return self.send_json({"error": "Нужно войти"}, 401)
+        self.redirect("/login")
+
+    def login(self):
+        now = time.time()
+        while FAILS and FAILS[0] < now - 600:
+            FAILS.popleft()
+        if len(FAILS) >= 10:
+            return self.redirect("/login?error=locked")
+        pw_hash = load_hash()
+        if not pw_hash:
+            return self.redirect("/login?error=nopass")
+        size = int(self.headers.get("Content-Length") or 0)
+        form = parse_qs(self.rfile.read(size).decode("utf-8", "replace") if 0 < size <= 4096 else "")
+        pw = form.get("password", [""])[0].encode()
+        try:
+            ok = bool(pw) and bcrypt.checkpw(pw, pw_hash)
+        except ValueError:  # пароль длиннее 72 байт или битый хеш
+            ok = False
+        if not ok:
+            FAILS.append(now)
+            time.sleep(1)
+            return self.redirect("/login?error=1")
+        self.cookie = self.session_cookie()
+        self.redirect("/")
+
+    def session_cookie(self):
+        age = SESSION_DAYS * 86400
+        return f"{COOKIE}={make_token(load_hash(), int(time.time()) + age)}; Max-Age={age}; Path=/; HttpOnly; Secure; SameSite=Lax"
+
+    def redirect(self, location):
+        self.send_response(303)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def end_headers(self):
+        if getattr(self, "cookie", None):
+            self.send_header("Set-Cookie", self.cookie)
+        super().end_headers()
+
     def send_json(self, obj, code=200):
         self.send(json.dumps(obj, ensure_ascii=False), "application/json", code)
 
@@ -201,9 +313,14 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 8000))
     sys.stdout.reconfigure(encoding="utf-8")
+    if sys.argv[1:] == ["passwd"]:  # docker exec -it inbody-web-1 python app.py passwd
+        set_password()
+        sys.exit()
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("PORT", 8000))
     print(f"http://{HOST}:{port}  PDF: {PDFS}", flush=True)
+    if AUTH and not load_hash():
+        print("Вход включён, но пароль не задан — сайт закрыт. Задать: python app.py passwd", flush=True)
     # Прогрев кэша: иначе первый запрос после старта ждёт разбора всех PDF (~2 с)
     threading.Thread(target=lambda: (records(), figure("muscle")), daemon=True).start()
     ThreadingHTTPServer((HOST, port), Handler).serve_forever()

@@ -20,11 +20,12 @@ main() {
     [ "$code" = "200" ] && break
     sleep 1
   done
-  # данные без входа должны быть закрыты (401); 200 допустим только у старой версии без входа в приложении
+  # данные без входа должны быть закрыты (401): иначе сайт открыт всему интернету
   data=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8400/api/data 2>/dev/null || true)
   echo "сайт: $code, данные без входа: $data"
   echo "версия: $(git log -1 --format='%h %s')"
   echo "время:  $(date '+%d.%m.%Y %H:%M:%S')"
   [ "$code" = "200" ] || { docker compose logs --tail 50; echo "!!! сайт не отвечает" >&2; return 1; }
+  [ "$data" = "401" ] || { echo "!!! данные доступны без входа (ответ $data) — проверить INBODY_AUTH" >&2; return 1; }
 }
 main "$@"

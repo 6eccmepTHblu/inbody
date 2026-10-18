@@ -79,6 +79,58 @@ def test_api():
             srv.server_close()
 
 
+def test_auth():
+    import http.client
+    import json
+    import tempfile
+    import threading
+    import time
+
+    import bcrypt
+
+    import app
+
+    def req(method, path, body=None, cookie=None):
+        c = http.client.HTTPConnection("127.0.0.1", srv.server_port)
+        c.request(method, path, body, {"Cookie": cookie} if cookie else {})
+        r = c.getresponse()
+        r.read()
+        return r.status, r.getheader("Location"), r.getheader("Set-Cookie")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        app.PDFS, app.AUTH = Path(tmp), True
+        app.FAILS.clear()
+        srv = app.ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            # пароль не задан — закрыто всё, кроме страницы входа, манифеста и иконок
+            assert req("GET", "/api/data")[0] == 401
+            assert req("POST", "/login", "password=x")[1] == "/login?error=nopass"
+            (app.PDFS / "auth.json").write_text(json.dumps({"hash": bcrypt.hashpw(b"secret", bcrypt.gensalt(4)).decode()}))
+            assert req("GET", "/")[:2] == (303, "/login")
+            assert req("GET", "/figure/muscle.svg")[0] == 401
+            assert req("POST", "/api/settings", "{}")[0] == 401
+            for p in ("/login", "/manifest.webmanifest", "/icon-192.png", "/icon.svg"):
+                assert req("GET", p)[0] == 200, p
+            assert req("POST", "/login", "password=wrong")[1] == "/login?error=1"
+            status, loc, cookie = req("POST", "/login", "username=slava&password=secret")
+            assert (status, loc) == (303, "/") and all(a in cookie for a in ("HttpOnly", "Secure", "SameSite=Lax", "Max-Age=2592000"))
+            session = cookie.split(";")[0]
+            assert req("GET", "/api/data", cookie=session)[0] == 200
+            assert "Max-Age=2592000" in req("GET", "/", cookie=session)[2]  # открытие сайта продлевает вход
+            forged = session[:-1] + ("0" if session[-1] != "0" else "1")
+            assert req("GET", "/api/data", cookie=forged)[0] == 401
+            expired = f"{app.COOKIE}={app.make_token(app.load_hash(), int(time.time()) - 5)}"
+            assert req("GET", "/api/data", cookie=expired)[0] == 401
+            app.FAILS.extend([time.time()] * 10)  # 10 неудач подряд — вход на паузе даже с верным паролем
+            assert req("POST", "/login", "password=secret")[1] == "/login?error=locked"
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            app.AUTH = False
+            app.FAILS.clear()
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
