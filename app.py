@@ -3,7 +3,9 @@
 PDF из папки «результаты» (или INBODY_PDFS) разбираются на лету с кэшем по mtime:
 новый файл — загрузить через страницу или положить в папку и обновить страницу.
 """
+import csv
 import functools
+import io
 import getpass
 import hashlib
 import hmac
@@ -68,6 +70,38 @@ def records():
             seen.add(d["date"])
             unique.append(d)
     return {"records": sorted(unique, key=lambda d: d["date"]), "errors": errors, "settings": load_settings()}
+
+
+BODY = {"weight": "Вес", "muscle": "Мышцы", "fat": "Жир", "water": "Вода", "protein": "Белок", "bones": "Кости",
+        "visceral_fat": "Висцеральный жир", "bmi": "ИМТ", "lean_mass": "Безжировая масса"}
+SEG = {"left_arm": "Левая рука", "right_arm": "Правая рука", "trunk": "Торс", "left_leg": "Левая нога", "right_leg": "Правая нога"}
+
+
+def export_csv(recs):
+    """Одна строка на замер, все показатели в столбцах; ';' и BOM — чтобы русский Excel открыл без мастера импорта."""
+    cols = [("Дата", lambda r: r["date"]), ("Имя", lambda r: r["name"]), ("Пол", lambda r: r["sex"]),
+            ("Возраст", lambda r: r["age"]), ("Рост, см", lambda r: r["height_cm"]), ("Оценка InBody", lambda r: r.get("inbody_score"))]
+    for k, n in BODY.items():
+        cols += [(n, lambda r, k=k: r["body"][k]["value"]), (f"{n}: норма от", lambda r, k=k: r["body"][k]["range"][0]),
+                 (f"{n}: норма до", lambda r, k=k: r["body"][k]["range"][1]), (f"{n}: статус", lambda r, k=k: r["body"][k]["status"])]
+    for key, title in (("segmental_muscle", "Мышцы"), ("segmental_fat", "Жир")):
+        cols.append((f"{title}: всего, кг", lambda r, key=key: r[key]["total_kg"]))
+        for k, n in SEG.items():
+            cols += [(f"{title}, {n.lower()}, кг", lambda r, key=key, k=k: r[key][k]["kg"]),
+                     (f"{title}, {n.lower()}, %", lambda r, key=key, k=k: r[key][k]["percent"])]
+
+    def cell(f, r):
+        try:
+            return f(r)
+        except (KeyError, TypeError, IndexError):
+            return ""  # в старом макете части показателей нет
+
+    out = io.StringIO()
+    w = csv.writer(out, delimiter=";", lineterminator="\r\n")
+    w.writerow(n for n, _ in cols)
+    for r in recs:
+        w.writerow("" if (v := cell(f, r)) is None else str(v).replace(".", ",") if isinstance(v, float) else v for _, f in cols)
+    return "﻿" + out.getvalue()
 
 
 def load_settings():
@@ -188,6 +222,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.cookie = self.session_cookie()  # каждое открытие сайта продлевает вход
         if self.path == "/api/data":
             self.send_json(records())
+        elif path == "/api/export":
+            self.export(parse_qs(urlsplit(self.path).query))
         elif self.path in ("/figure/muscle.svg", "/figure/fat.svg"):
             svg = figure(self.path.removeprefix("/figure/").removesuffix(".svg"))
             self.send(svg, "image/svg+xml", cache="private, max-age=86400") if svg else self.send_error(404, "нет PDF нового макета")
@@ -232,6 +268,19 @@ class Handler(SimpleHTTPRequestHandler):
         PDFS.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(data)
         self.send_json({"date": date}, 201)
+
+    def export(self, q):
+        """/api/export?from=ГГГГ-ММ-ДД&to=ГГГГ-ММ-ДД&format=csv|json — замеры за период включительно."""
+        lo, hi = q.get("from", [""])[0], q.get("to", [""])[0] or "9999-12-31"
+        if not all(re.fullmatch(r"\d{4}-\d\d-\d\d", d) for d in (lo or "0000-00-00", hi)):
+            return self.send_json({"error": "Дата должна быть ГГГГ-ММ-ДД"}, 400)
+        recs = [r for r in records()["records"] if lo <= r["date"] <= hi]
+        if not recs:
+            return self.send_json({"error": "За этот период замеров нет"}, 404)
+        kind = "json" if q.get("format") == ["json"] else "csv"
+        text = json.dumps(recs, ensure_ascii=False, indent=1) if kind == "json" else export_csv(recs)
+        self.send(text, "application/json" if kind == "json" else "text/csv", extra={
+            "Content-Disposition": f"attachment; filename=inbody_{recs[0]['date']}_{recs[-1]['date']}.{kind}"})
 
     def save_settings(self):
         size = int(self.headers.get("Content-Length") or 0)
@@ -307,13 +356,15 @@ class Handler(SimpleHTTPRequestHandler):
     def send_json(self, obj, code=200):
         self.send(json.dumps(obj, ensure_ascii=False), "application/json", code)
 
-    def send(self, text, ctype, code=200, cache=None):
+    def send(self, text, ctype, code=200, cache=None, extra=None):
         body = text.encode()
         self.send_response(code)
         self.send_header("Content-Type", f"{ctype}; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         if cache:
             self.send_header("Cache-Control", cache)
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 

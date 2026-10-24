@@ -39,6 +39,13 @@
   .notice { background: var(--ok-bg); }
   .upload { font: inherit; font-weight: 700; color: #fff; background: var(--ink); border: 0; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
   .upload:hover, .upload:focus-visible { background: #005966; }
+  .export { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+  .export:hover, .export:focus-visible { background: #fff; border-color: var(--hover); }
+  dialog { border: 1px solid var(--line); border-radius: 16px; padding: 16px; color: var(--ink); }
+  dialog form { display: grid; gap: 12px; }
+  dialog label { display: grid; gap: 4px; }
+  dialog label.r { display: flex; align-items: center; gap: 8px; }
+  dialog .btns { display: flex; gap: 8px; justify-content: flex-end; }
 
   header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; padding: 4px 2px 6px; }
   header .brand { font-weight: 800; font-size: 20px; margin-right: auto; }
@@ -268,7 +275,7 @@ function render() {
   const header = h('header', {},
     h('div', { class: 'brand' }, 'InBody ', h('span', {}, '· динамика')),
     [['Имя', cur.name], ['Пол', cur.sex], ['Возраст', cur.age], ['Рост', `${cur.height_cm} см`]].map(([k, v]) => h('div', {}, h('span', { class: 'k' }, k), h('b', {}, v))),
-    h('label', {}, h('span', { class: 'k' }, 'Дата'), select), uploadButton());
+    h('label', {}, h('span', { class: 'k' }, 'Дата'), select), exportButton(), uploadButton());
 
   // карточки Вес / Мышцы / Жир
   const cards = ['weight', 'muscle', 'fat'].map(k => {
@@ -753,6 +760,21 @@ addEventListener('resize', () => { cancelAnimationFrame(raf); raf = requestAnima
 
 // --- загрузка PDF ---
 const messages = () => [...errors.map(e => h('p', { class: 'error' }, e)), ...notices.map(n => h('p', { class: n.ok ? 'notice' : 'error' }, n.text))];
+
+function exportButton() {
+  const first = recs[0].date, last = recs.at(-1).date;
+  const date = (name, v) => h('input', { type: 'date', name, value: v, min: first, max: last, required: true });
+  const radio = (v, t) => h('label', { class: 'r' }, h('input', { type: 'radio', name: 'format', value: v, checked: v === 'csv' || null }), t);
+  const dlg = h('dialog', {}, h('form', { method: 'get', action: '/api/export', onsubmit: () => setTimeout(() => dlg.close()) },
+    h('b', {}, 'Выгрузка замеров'),
+    h('label', {}, h('span', { class: 'k' }, 'С'), date('from', first)),
+    h('label', {}, h('span', { class: 'k' }, 'По'), date('to', last)),
+    radio('csv', 'CSV (Excel)'), radio('json', 'JSON (все данные)'),
+    h('div', { class: 'btns' },
+      h('button', { class: 'upload export', type: 'button', onclick: () => dlg.close() }, 'Отмена'),
+      h('button', { class: 'upload', type: 'submit' }, 'Скачать'))));
+  return [h('button', { class: 'upload export', type: 'button', onclick: () => dlg.showModal() }, 'Выгрузить'), dlg];
+}
 
 function uploadButton() {
   const input = h('input', { type: 'file', accept: 'application/pdf,.pdf', multiple: true, hidden: true, onchange: e => upload([...e.target.files]) });
