@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>InBody — динамика</title>
-<!-- Установка как приложение; манифест и иконки отдаются без пароля (правило в Caddy) -->
-<link rel="manifest" href="/manifest.webmanifest">
+<!-- Cookie нужна, чтобы ngrok не подменял манифест страницей предупреждения. -->
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <meta name="theme-color" content="#ffffff">

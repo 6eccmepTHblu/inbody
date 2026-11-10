@@ -3,6 +3,18 @@
 Парсер PDF-отчётов InBody (DDX Fitness) в JSON. Блоки «История состава тела» и
 «Обмен веществ / Суточная норма калорий / Оптимальный вес / До оптимального веса» пропускаются.
 
+## Сайт переехал
+
+С 10 ноября 2026 года сайт доступен по новому адресу:
+**[InBody — динамика](https://dispatch-junction-animate.ngrok-free.dev/)**.
+
+Сайт работает на локальном ПК с Windows 11 без Docker, внешний доступ — через ngrok.
+Сайт и туннель запускаются автоматически при загрузке Windows; для доступа ПК должен
+быть включён, подключён к интернету и не находиться в спящем режиме. Вход защищён паролем.
+Прежний адрес `https://inbody.2-27-10-45.sslip.io/` на VPS больше не используется.
+
+## Парсер
+
 ```bash
 pip install -r requirements.txt
 python parse_inbody.py результаты/261016_inbody_result.pdf   # JSON в stdout
@@ -38,9 +50,52 @@ PDF читаются из `результаты/` на лету: новый фа
 Загрузка новых отчётов — кнопка «Загрузить PDF» (или перетащить файлы на страницу).
 Файл сохраняется как `ГГММДД_inbody_result.pdf` по дате замера; повтор за ту же дату отклоняется.
 
-## Сервер
+## Windows 11 без Docker
 
-Живёт в `/srv/inbody` (Docker, `127.0.0.1:8400`), снаружи — `https://inbody.2-27-10-45.sslip.io/`
+Локальная установка: Python 3.12, `python -m venv .venv`, затем
+`.venv\Scripts\python.exe -m pip install -r requirements.txt`.
+ngrok устанавливается из Microsoft Store: `winget install ngrok -s msstore`.
+
+Однократная настройка из PowerShell в папке проекта:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\configure.ps1
+```
+
+В окне задайте пароль сайта и вставьте **только authtoken** со страницы
+https://dashboard.ngrok.com/get-started/your-authtoken (ввод скрыт).
+Подтвердите запрос Windows на создание задач автозапуска.
+Скрипт откроет постоянный HTTPS-адрес ngrok и сохранит его в `.local/public-url.txt`.
+Бесплатный ngrok назначает постоянный адрес аккаунту; действуют лимиты тарифа и промежуточная страница ngrok.
+
+На Android сайт можно установить через меню Chrome → «Добавить на главный экран» → «Установить».
+Если ngrok показывает предупреждение, сначала нажмите «Visit Site».
+Манифест подключён с `crossorigin="use-credentials"`, чтобы при его загрузке браузер
+передавал cookie ngrok и получал описание приложения вместо страницы предупреждения.
+
+Задачи `InBody-Web` и `InBody-Tunnel` запускаются при загрузке Windows до входа
+пользователя, с его обычными правами (S4U, пароль Windows не хранится).
+При ошибке — перезапуск через минуту; ограничения времени работы нет.
+Сам сайт слушает только `127.0.0.1:8000`, вход обязателен (`INBODY_AUTH=1`).
+Публичный доступ идёт через HTTPS ngrok, открывать порты роутера не нужно.
+Состояние задач смотрите в планировщике Windows, логи — в `.local/`.
+Токен хранится только в `.local/ngrok.yml`; папка исключена из Git и доступна
+текущему пользователю, SYSTEM и администраторам. Пароль сайта хранится в виде хеша
+в `результаты/auth.json`. Сменить: `.venv\Scripts\python.exe app.py passwd`.
+
+Компьютер и интернет должны работать, сон прерывает доступ.
+Для удаления автозапуска выполните в PowerShell администратора:
+
+```powershell
+'InBody-Tunnel', 'InBody-Web' | ForEach-Object {
+    Stop-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $_ -Confirm:$false
+}
+```
+
+## Прежний сервер (VPS)
+
+Ранее размещался в `/srv/inbody` (Docker, `127.0.0.1:8400`), снаружи — `https://inbody.2-27-10-45.sslip.io/`
 через общий Caddy. PDF лежат в `/srv/inbody/data` и переживают пересборку.
 
 Вход — в самом приложении (на сервере `INBODY_AUTH=1`, локально выключен): страница `/login`,

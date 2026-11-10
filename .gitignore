@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .venv/
+.local/
 .claude/settings.local.json
 
 # Личные данные: репозиторий публичный
